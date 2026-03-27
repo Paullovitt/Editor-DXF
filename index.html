@@ -1,0 +1,88 @@
+﻿<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DXF Editor 2D</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="toolbar">
+      <div class="toolbar-group">
+        <label class="button">
+          Abrir DXF
+          <input id="fileInput" type="file" accept=".dxf" hidden />
+        </label>
+        <button id="exportBtn">Baixar DXF</button>
+        <button id="fitBtn">Enquadrar</button>
+      </div>
+      <div class="toolbar-group">
+        <button data-tool="select" class="tool active">Selecionar</button>
+        <button data-tool="vertex" class="tool">Vertices</button>
+        <button data-tool="window" class="tool">Janela</button>
+      </div>
+      <div class="toolbar-group">
+        <button id="duplicateBtn">Duplicar</button>
+        <button id="deleteBtn">Excluir</button>
+        <button id="rotateBtn">Rotacionar</button>
+        <button id="scaleBtn">Escalar</button>
+        <button id="mirrorXBtn">Espelhar X</button>
+        <button id="mirrorYBtn">Espelhar Y</button>
+      </div>
+      <div class="toolbar-group">
+        <button id="undoBtn">Undo</button>
+        <button id="redoBtn">Redo</button>
+        <label class="toggle"><input id="showGrid" type="checkbox" checked> Grade</label>
+        <label class="toggle"><input id="snapGrid" type="checkbox" checked> Snap grade</label>
+        <label class="toggle"><input id="snapPoints" type="checkbox" checked> Snap pontos</label>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar left">
+        <section>
+          <h3>Camadas</h3>
+          <div id="layers"></div>
+        </section>
+        <section>
+          <h3>Ajuda</h3>
+          <div class="help">
+            <p>Unidade de trabalho: <strong>milimetros</strong>.</p>
+            <p>Roda do mouse = zoom. Botao direito = pan.</p>
+            <p>Selecionar = mover pecas.</p>
+            <p>Vertices = editar pontos, centros e raios.</p>
+            <p>Janela = arraste uma area para selecionar.</p>
+            <p>Atalhos: Delete, Ctrl+Z, Ctrl+Y.</p>
+          </div>
+        </section>
+      </aside>
+
+      <section id="viewportWrap">
+        <canvas id="viewport"></canvas>
+        <div id="labelsLayer"></div>
+        <div id="selectionRect"></div>
+        <div id="dropHint">Solte um arquivo DXF aqui</div>
+        <div id="statusbar">Pronto.</div>
+      </section>
+
+      <aside class="sidebar right">
+        <section>
+          <h3>Objeto</h3>
+          <div id="selectionInfo">Nenhum objeto selecionado.</div>
+        </section>
+        <section>
+          <h3>Propriedades</h3>
+          <form id="properties"></form>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script src="./lib/three.min.js"></script>
+  <script src="./lib/OrbitControls.js"></script>
+  <script src="./src/model.js"></script>
+  <script src="./src/dxf.js"></script>
+  <script src="./src/app.js"></script>
+</body>
+</html>
