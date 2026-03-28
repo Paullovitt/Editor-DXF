@@ -69,8 +69,9 @@ let redoStack = [];
 let needsRender = true;
 let pendingZoom = null;
 const ENTITY_PICK_RADIUS_PX = 2;
-const VERTEX_PICK_RADIUS_PX = 2;
+const VERTEX_PICK_RADIUS_PX = 10;
 const YELLOW_HANDLE_SCALE = 3;
+const HANDLE_BASE_RADIUS = 1.25;
 
 function setStatus(msg) { statusbar.textContent = msg; }
 function requestRender() { needsRender = true; }
@@ -190,6 +191,7 @@ function zoomAtClient(clientX, clientY, deltaY) {
   camera.position.y += dy;
   controls.target.x += dx;
   controls.target.y += dy;
+  buildHandles();
   rebuildGrid();
   updateLabelPositions();
   requestRender();
@@ -320,7 +322,7 @@ function snapWorld(pos, excludeEntityId = null) {
 }
 
 function makeHandle(pos, color = 0xfbbf24, meta = {}, sizeScale = 1) {
-  const size = (0.55 * sizeScale) / Math.max(0.1, camera.zoom);
+  const size = (HANDLE_BASE_RADIUS * sizeScale) / Math.max(0.1, camera.zoom);
   const geom = new THREE.CircleGeometry(size, 18);
   const mat = new THREE.MeshBasicMaterial({ color });
   const mesh = new THREE.Mesh(geom, mat);
@@ -376,11 +378,15 @@ function buildHandles() {
     if (e.type === 'LINE') {
       handlesRoot.add(makeHandle({ x: e.x1, y: e.y1 }, 0xfbbf24, { entityId: e.id, vertexIndex: 0 }, YELLOW_HANDLE_SCALE));
       handlesRoot.add(makeHandle({ x: e.x2, y: e.y2 }, 0xfbbf24, { entityId: e.id, vertexIndex: 1 }, YELLOW_HANDLE_SCALE));
+      handlesRoot.add(makeHandle({ x: (e.x1 + e.x2) / 2, y: (e.y1 + e.y2) / 2 }, 0xfbbf24, { entityId: e.id, vertexIndex: 'midpoint' }, YELLOW_HANDLE_SCALE));
     } else if (e.type === 'POINT') {
       handlesRoot.add(makeHandle({ x: e.x, y: e.y }, 0xfbbf24, { entityId: e.id, vertexIndex: 'point' }, YELLOW_HANDLE_SCALE));
     } else if (e.type === 'CIRCLE' || e.type === 'ARC') {
       handlesRoot.add(makeHandle({ x: e.cx, y: e.cy }, 0x22c55e, { entityId: e.id, vertexIndex: 'center' }));
-      handlesRoot.add(makeHandle({ x: e.cx + e.r, y: e.cy }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radius' }, YELLOW_HANDLE_SCALE));
+      handlesRoot.add(makeHandle({ x: e.cx + e.r, y: e.cy }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radiusE' }, YELLOW_HANDLE_SCALE));
+      handlesRoot.add(makeHandle({ x: e.cx, y: e.cy + e.r }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radiusN' }, YELLOW_HANDLE_SCALE));
+      handlesRoot.add(makeHandle({ x: e.cx - e.r, y: e.cy }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radiusW' }, YELLOW_HANDLE_SCALE));
+      handlesRoot.add(makeHandle({ x: e.cx, y: e.cy - e.r }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radiusS' }, YELLOW_HANDLE_SCALE));
     } else if (e.points?.length) {
       e.points.forEach((p, i) => handlesRoot.add(makeHandle(p, 0xfbbf24, { entityId: e.id, vertexIndex: i }, YELLOW_HANDLE_SCALE)));
     }
@@ -548,6 +554,7 @@ function fitView() {
   camera.updateProjectionMatrix();
   controls.target.set(camera.position.x, camera.position.y, 0);
   controls.update();
+  buildHandles();
   rebuildGrid();
   updateLabelPositions();
   requestRender();
@@ -591,6 +598,12 @@ function refreshSelectionInfo() {
     `;
     return;
   }
+  if (tool === 'select') {
+    selectionInfoEl.innerHTML = `
+      <div class="small">${selectedIds.size === 1 ? '1 peca selecionada.' : `${selectedIds.size} pecas selecionadas.`}</div>
+    `;
+    return;
+  }
   if (selectedIds.size > 1) {
     selectionInfoEl.innerHTML = `
       <div class="metric"><span class="badge">${selectedIds.size}</span> pecas selecionadas</div>
@@ -623,22 +636,11 @@ function makeInputRow(label, value, onChange, type = 'text', step = '0.01') {
   return row;
 }
 
-function makeReadOnlyRow(label, value) {
-  const row = makeInputRow(label, value, () => {}, 'text', '1');
-  const input = row.querySelector('input');
-  if (input) input.disabled = true;
-  return row;
-}
-
 function refreshProperties() {
   propertiesEl.innerHTML = '';
   if (selectedIds.size !== 1) return;
   const e = entityById([...selectedIds][0]);
   if (!e) return;
-  const pieceSize = currentPieceSize();
-  propertiesEl.appendChild(makeReadOnlyRow('Codigo da peca', currentPieceCode()));
-  propertiesEl.appendChild(makeReadOnlyRow('Tamanho X (mm)', Number(pieceSize.x).toFixed(2)));
-  propertiesEl.appendChild(makeReadOnlyRow('Tamanho Y (mm)', Number(pieceSize.y).toFixed(2)));
   propertiesEl.appendChild(makeInputRow('Camada', e.layer || '0', (v) => { e.layer = v || '0'; ensureLayers(doc); rebuildScene(); refreshUi(); }, 'text', '1'));
   if (e.type === 'LINE') {
     [['X1', e.x1], ['Y1', e.y1], ['X2', e.x2], ['Y2', e.y2]].forEach(([k, v]) => {
@@ -676,6 +678,7 @@ function setTool(next) {
   controls.enabled = next !== 'window';
   buildHandles();
   rebuildMeasurements();
+  refreshUi();
   requestRender();
 }
 
@@ -722,9 +725,19 @@ function hoverHandleNear(clientX, clientY) {
     const e = entityById(eId);
     if (!e) continue;
     const pts = [];
-    if (e.type === 'LINE') pts.push({ idx: 0, p: { x: e.x1, y: e.y1 } }, { idx: 1, p: { x: e.x2, y: e.y2 } });
+    if (e.type === 'LINE') pts.push(
+      { idx: 0, p: { x: e.x1, y: e.y1 } },
+      { idx: 1, p: { x: e.x2, y: e.y2 } },
+      { idx: 'midpoint', p: { x: (e.x1 + e.x2) / 2, y: (e.y1 + e.y2) / 2 } }
+    );
     else if (e.type === 'POINT') pts.push({ idx: 'point', p: { x: e.x, y: e.y } });
-    else if (e.type === 'CIRCLE' || e.type === 'ARC') pts.push({ idx: 'center', p: { x: e.cx, y: e.cy } }, { idx: 'radius', p: { x: e.cx + e.r, y: e.cy } });
+    else if (e.type === 'CIRCLE' || e.type === 'ARC') pts.push(
+      { idx: 'center', p: { x: e.cx, y: e.cy } },
+      { idx: 'radiusE', p: { x: e.cx + e.r, y: e.cy } },
+      { idx: 'radiusN', p: { x: e.cx, y: e.cy + e.r } },
+      { idx: 'radiusW', p: { x: e.cx - e.r, y: e.cy } },
+      { idx: 'radiusS', p: { x: e.cx, y: e.cy - e.r } }
+    );
     else if (e.points) e.points.forEach((p, i) => pts.push({ idx: i, p }));
     for (const item of pts) {
       const d = distance(world, item.p);
@@ -956,7 +969,7 @@ viewport.addEventListener('wheel', (e) => {
   queueZoomAtClient(e.clientX, e.clientY, normalizeWheelDelta(e));
 }, { passive: false });
 
-window.addEventListener('resize', () => { resize(); rebuildGrid(); updateLabelPositions(); });
+window.addEventListener('resize', () => { resize(); buildHandles(); rebuildGrid(); updateLabelPositions(); });
 window.addEventListener('keydown', (e) => {
   const target = e.target;
   const typing = target && (

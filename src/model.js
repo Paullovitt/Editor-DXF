@@ -179,11 +179,19 @@ function duplicateEntity(e) {
     if (entity.type === 'LINE') {
       if (index === 0) { entity.x1 = pos.x; entity.y1 = pos.y; }
       if (index === 1) { entity.x2 = pos.x; entity.y2 = pos.y; }
+      if (index === 'midpoint') {
+        const midX = (entity.x1 + entity.x2) / 2;
+        const midY = (entity.y1 + entity.y2) / 2;
+        const dx = pos.x - midX;
+        const dy = pos.y - midY;
+        entity.x1 += dx; entity.y1 += dy;
+        entity.x2 += dx; entity.y2 += dy;
+      }
       return;
     }
     if (entity.type === 'CIRCLE' || entity.type === 'ARC') {
       if (index === 'center') { entity.cx = pos.x; entity.cy = pos.y; }
-      if (index === 'radius') { entity.r = Math.max(0.001, distance({ x: entity.cx, y: entity.cy }, pos)); }
+      if (String(index).startsWith('radius')) { entity.r = Math.max(0.001, distance({ x: entity.cx, y: entity.cy }, pos)); }
       return;
     }
     if (entity.type === 'POINT') { entity.x = pos.x; entity.y = pos.y; return; }

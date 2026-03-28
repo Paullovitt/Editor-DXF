@@ -80,7 +80,12 @@ Solucao:
 - Selecao por `Janela` em linhas/polilinhas exibe cotas com seta e valor em milimetros no viewport.
 - Handles de vertice reduzidos para melhor leitura da geometria.
 - Pontos amarelos de vertice ajustados para 3x do tamanho base atual.
+- No modo `Vertices`, o painel de propriedades oculta `Codigo da peca`, `Tamanho X/Y` e `Camada`.
+- No modo `Selecionar`, o painel `Objeto` mostra apenas a contagem de pecas selecionadas.
+- Linhas retas exibem ponto amarelo adicional no ponto medio.
+- Circulos/arcos exibem ponto central e quatro pontos amarelos cardeais (N, S, L, O).
 - Tolerancia de selecao por mouse ajustada para um raio invisivel pequeno no ponteiro (aprox. 2 px), com adaptacao ao zoom.
+- Handles de vertice usam escala visual adaptativa por zoom sem reconstruir geometria a cada scroll, melhorando fluidez/performance.
 - `Esc` limpa a selecao.
 - Cursor muda para `pointer` quando o mouse se aproxima de geometria selecionavel.
 - Arraste de pecas otimizado para movimento mais fluido (commit no modelo ao soltar o mouse).
