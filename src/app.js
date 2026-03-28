@@ -6,7 +6,7 @@ if (!io) throw new Error('DxfIO nao encontrado. Carregue src/dxf.js antes de src
 
 const { parseDxf, exportDxf } = io;
 const {
-  GRID_SIZE, createEmptyDoc, cloneDoc, ensureLayers, getLayer, isEntityEditable, docBounds, entityCenter,
+  GRID_SIZE, createEmptyDoc, cloneDoc, ensureLayers, getLayer, isEntityEditable, docBounds,
   translateEntity, rotateEntity, scaleEntity, mirrorEntity, duplicateEntity, getEntitySnapPoints, deleteSelected,
   updateVertex, distance, entityBounds, entityIntersectsRect
 } = model;
@@ -49,7 +49,8 @@ controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
 const gridRoot = new THREE.Group();
 const workRoot = new THREE.Group();
 const handlesRoot = new THREE.Group();
-scene.add(gridRoot, workRoot, handlesRoot);
+const measureRoot = new THREE.Group();
+scene.add(gridRoot, workRoot, handlesRoot, measureRoot);
 
 const raycaster = new THREE.Raycaster();
 const mouseNdc = new THREE.Vector2();
@@ -61,12 +62,15 @@ let hoveredHandle = null;
 let tool = 'select';
 let dragState = null;
 let meshByEntityId = new Map();
-let labelEls = new Map();
+let measurementLabels = [];
 let currentFileName = 'editado.dxf';
 let undoStack = [];
 let redoStack = [];
 let needsRender = true;
 let pendingZoom = null;
+const ENTITY_PICK_RADIUS_PX = 2;
+const VERTEX_PICK_RADIUS_PX = 2;
+const YELLOW_HANDLE_SCALE = 3;
 
 function setStatus(msg) { statusbar.textContent = msg; }
 function requestRender() { needsRender = true; }
@@ -78,6 +82,43 @@ function fileCodeFromName(fileName = '') {
 }
 function currentPieceCode() {
   return fileCodeFromName(doc?.meta?.pieceCode || doc?.meta?.fileName || currentFileName || '') || 'Sem codigo';
+}
+function currentPieceSize() {
+  const bounds = docBounds(doc, false);
+  return {
+    x: Math.max(0, bounds.maxX - bounds.minX),
+    y: Math.max(0, bounds.maxY - bounds.minY),
+  };
+}
+function selectionPivot() {
+  const entities = [...selectedIds].map((id) => entityById(id)).filter(Boolean);
+  if (!entities.length) return { x: 0, y: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const entity of entities) {
+    const b = entityBounds(entity);
+    minX = Math.min(minX, b.minX);
+    minY = Math.min(minY, b.minY);
+    maxX = Math.max(maxX, b.maxX);
+    maxY = Math.max(maxY, b.maxY);
+  }
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+}
+function transformSelection(label, fn) {
+  const entities = [...selectedIds].map((id) => entityById(id)).filter(Boolean);
+  if (!entities.length) return false;
+  const pivot = selectionPivot();
+  pushUndo(label);
+  for (const entity of entities) fn(entity, pivot);
+  rebuildScene();
+  refreshUi();
+  return true;
+}
+function rotateSelected(angleDeg) {
+  const changed = transformSelection(`rotacionar ${angleDeg}`, (entity, pivot) => rotateEntity(entity, angleDeg, pivot));
+  if (!changed) setStatus('Selecione uma peca para rotacionar.');
 }
 
 function pushUndo(label = 'alteracao') {
@@ -174,9 +215,33 @@ function queueZoomAtClient(clientX, clientY, deltaY) {
   });
 }
 
+function worldPerPixel() {
+  const viewHeight = Math.max(1e-6, (camera.top - camera.bottom) / Math.max(0.1, camera.zoom));
+  return viewHeight / Math.max(1, viewport.clientHeight || viewportWrap.clientHeight || 1);
+}
+
+function pickRadiusWorld(px = 5) {
+  return Math.max(0.1, worldPerPixel() * px);
+}
+
 function updateRaycastThreshold() {
-  // Improves hit-testing for thin DXF lines when zoomed out and when mouse is near edges.
-  raycaster.params.Line.threshold = 20;
+  raycaster.params.Line.threshold = Math.max(0.15, worldPerPixel() * ENTITY_PICK_RADIUS_PX);
+}
+
+function intersectObjects(clientX, clientY, includeHandles = true) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouseNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  mouseNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  updateRaycastThreshold();
+  camera.updateMatrixWorld();
+  raycaster.setFromCamera(mouseNdc, camera);
+  if (includeHandles) {
+    const handleHits = raycaster.intersectObjects(handlesRoot.children, false);
+    if (handleHits.length) return { type: 'handle', object: handleHits[0].object };
+  }
+  const objectHits = raycaster.intersectObjects(workRoot.children, false);
+  if (objectHits.length) return { type: 'entity', object: objectHits[0].object };
+  return null;
 }
 
 function clientToLocal(clientX, clientY) {
@@ -210,7 +275,7 @@ function rebuildGrid() {
   const span = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
   const minor = GRID_SIZE;
   const major = GRID_SIZE * 10;
-  const extra = span;
+  const extra = span * 3;
   const minX = Math.floor((bounds.minX - extra) / minor) * minor;
   const maxX = Math.ceil((bounds.maxX + extra) / minor) * minor;
   const minY = Math.floor((bounds.minY - extra) / minor) * minor;
@@ -254,8 +319,8 @@ function snapWorld(pos, excludeEntityId = null) {
   return snapped;
 }
 
-function makeHandle(pos, color = 0xfbbf24, meta = {}) {
-  const size = 4 / Math.max(0.1, camera.zoom);
+function makeHandle(pos, color = 0xfbbf24, meta = {}, sizeScale = 1) {
+  const size = (0.55 * sizeScale) / Math.max(0.1, camera.zoom);
   const geom = new THREE.CircleGeometry(size, 18);
   const mat = new THREE.MeshBasicMaterial({ color });
   const mesh = new THREE.Mesh(geom, mat);
@@ -309,15 +374,15 @@ function buildHandles() {
     const e = entityById(id);
     if (!e) continue;
     if (e.type === 'LINE') {
-      handlesRoot.add(makeHandle({ x: e.x1, y: e.y1 }, 0xfbbf24, { entityId: e.id, vertexIndex: 0 }));
-      handlesRoot.add(makeHandle({ x: e.x2, y: e.y2 }, 0xfbbf24, { entityId: e.id, vertexIndex: 1 }));
+      handlesRoot.add(makeHandle({ x: e.x1, y: e.y1 }, 0xfbbf24, { entityId: e.id, vertexIndex: 0 }, YELLOW_HANDLE_SCALE));
+      handlesRoot.add(makeHandle({ x: e.x2, y: e.y2 }, 0xfbbf24, { entityId: e.id, vertexIndex: 1 }, YELLOW_HANDLE_SCALE));
     } else if (e.type === 'POINT') {
-      handlesRoot.add(makeHandle({ x: e.x, y: e.y }, 0xfbbf24, { entityId: e.id, vertexIndex: 'point' }));
+      handlesRoot.add(makeHandle({ x: e.x, y: e.y }, 0xfbbf24, { entityId: e.id, vertexIndex: 'point' }, YELLOW_HANDLE_SCALE));
     } else if (e.type === 'CIRCLE' || e.type === 'ARC') {
       handlesRoot.add(makeHandle({ x: e.cx, y: e.cy }, 0x22c55e, { entityId: e.id, vertexIndex: 'center' }));
-      handlesRoot.add(makeHandle({ x: e.cx + e.r, y: e.cy }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radius' }));
+      handlesRoot.add(makeHandle({ x: e.cx + e.r, y: e.cy }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radius' }, YELLOW_HANDLE_SCALE));
     } else if (e.points?.length) {
-      e.points.forEach((p, i) => handlesRoot.add(makeHandle(p, 0xfbbf24, { entityId: e.id, vertexIndex: i })));
+      e.points.forEach((p, i) => handlesRoot.add(makeHandle(p, 0xfbbf24, { entityId: e.id, vertexIndex: i }, YELLOW_HANDLE_SCALE)));
     }
   }
 }
@@ -348,16 +413,122 @@ function rebuildScene() {
   }
   buildHandles();
   rebuildGrid();
+  rebuildMeasurements();
   requestRender();
 }
 
+function clearMeasurements() {
+  while (measureRoot.children.length) {
+    const c = measureRoot.children.pop();
+    c.geometry?.dispose?.();
+    c.material?.dispose?.();
+  }
+  for (const item of measurementLabels) item.el.remove();
+  measurementLabels = [];
+  labelsLayer.style.display = 'none';
+}
+
+function collectMeasurementSegments() {
+  const segments = [];
+  const MAX_SEGMENTS = 160;
+  for (const id of selectedIds) {
+    const e = entityById(id);
+    if (!e) continue;
+    if (e.type === 'LINE') {
+      segments.push([{ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }]);
+    } else if (e.points?.length && e.points.length >= 2) {
+      for (let i = 1; i < e.points.length; i += 1) {
+        segments.push([e.points[i - 1], e.points[i]]);
+      }
+      if (e.closed && e.points.length > 2) {
+        segments.push([e.points[e.points.length - 1], e.points[0]]);
+      }
+    }
+    if (segments.length >= MAX_SEGMENTS) break;
+  }
+  return segments.slice(0, MAX_SEGMENTS);
+}
+
+function addMeasurementLabel(worldPos, text) {
+  const el = document.createElement('div');
+  el.className = 'measure-label';
+  el.textContent = text;
+  labelsLayer.appendChild(el);
+  measurementLabels.push({ el, worldPos });
+}
+
+function rebuildMeasurements() {
+  clearMeasurements();
+  if (tool !== 'window' || !selectedIds.size) return;
+  const segments = collectMeasurementSegments();
+  if (!segments.length) return;
+  const points = [];
+  const pushSegment = (a, b) => {
+    points.push(new THREE.Vector3(a.x, a.y, 2.2), new THREE.Vector3(b.x, b.y, 2.2));
+  };
+
+  for (const [start, end] of segments) {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) continue;
+
+    const ux = dx / len;
+    const uy = dy / len;
+    const nx = -uy;
+    const ny = ux;
+
+    const offset = Math.max(8 / camera.zoom, 1.4);
+    const a = { x: start.x + nx * offset, y: start.y + ny * offset };
+    const b = { x: end.x + nx * offset, y: end.y + ny * offset };
+
+    const arrowLenRaw = Math.max(4 / camera.zoom, 0.9);
+    const arrowLen = Math.min(len * 0.35, arrowLenRaw);
+    const arrowHalf = arrowLen * 0.55;
+
+    const aLeft = { x: a.x + ux * arrowLen + nx * arrowHalf, y: a.y + uy * arrowLen + ny * arrowHalf };
+    const aRight = { x: a.x + ux * arrowLen - nx * arrowHalf, y: a.y + uy * arrowLen - ny * arrowHalf };
+    const bLeft = { x: b.x - ux * arrowLen + nx * arrowHalf, y: b.y - uy * arrowLen + ny * arrowHalf };
+    const bRight = { x: b.x - ux * arrowLen - nx * arrowHalf, y: b.y - uy * arrowLen - ny * arrowHalf };
+
+    pushSegment(start, a);
+    pushSegment(end, b);
+    pushSegment(a, b);
+    pushSegment(a, aLeft);
+    pushSegment(a, aRight);
+    pushSegment(b, bLeft);
+    pushSegment(b, bRight);
+
+    const labelPos = { x: (a.x + b.x) / 2 + nx * (4 / camera.zoom), y: (a.y + b.y) / 2 + ny * (4 / camera.zoom) };
+    addMeasurementLabel(labelPos, mm(len));
+  }
+
+  if (!points.length) return;
+  const geom = new THREE.BufferGeometry().setFromPoints(points);
+  const mat = new THREE.LineBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.95 });
+  const lines = new THREE.LineSegments(geom, mat);
+  measureRoot.add(lines);
+  labelsLayer.style.display = 'block';
+  updateLabelPositions();
+}
+
 function rebuildLabels() {
-  labelsLayer.innerHTML = '';
-  labelEls = new Map();
+  clearMeasurements();
 }
 
 function updateLabelPositions() {
-  // Labels intentionally disabled to keep the viewport clean.
+  if (!measurementLabels.length) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  for (const item of measurementLabels) {
+    const v = new THREE.Vector3(item.worldPos.x, item.worldPos.y, 0).project(camera);
+    if (v.z < -1 || v.z > 1) {
+      item.el.style.display = 'none';
+      continue;
+    }
+    item.el.style.display = 'block';
+    item.el.style.left = `${(v.x * 0.5 + 0.5) * rect.width}px`;
+    item.el.style.top = `${(-v.y * 0.5 + 0.5) * rect.height}px`;
+  }
 }
 
 function fitView() {
@@ -410,9 +581,12 @@ function refreshLayers() {
 
 function refreshSelectionInfo() {
   const pieceCode = currentPieceCode();
+  const pieceSize = currentPieceSize();
   if (!selectedIds.size) {
     selectionInfoEl.innerHTML = `
       <div class="metric"><strong>${pieceCode}</strong></div>
+      <div class="metric">Tamanho X: ${mm(pieceSize.x)}</div>
+      <div class="metric">Tamanho Y: ${mm(pieceSize.y)}</div>
       <div class="small">Nenhum objeto selecionado.</div>
     `;
     return;
@@ -421,28 +595,17 @@ function refreshSelectionInfo() {
     selectionInfoEl.innerHTML = `
       <div class="metric"><span class="badge">${selectedIds.size}</span> pecas selecionadas</div>
       <div class="small">Codigo da peca: ${pieceCode}</div>
+      <div class="metric">Tamanho X: ${mm(pieceSize.x)}</div>
+      <div class="metric">Tamanho Y: ${mm(pieceSize.y)}</div>
     `;
     return;
   }
-  const e = entityById([...selectedIds][0]);
-  if (!e) return;
-  const center = entityCenter(e);
-  const bounds = entityBounds(e);
-  const widthX = Math.max(0, bounds.maxX - bounds.minX);
-  const heightY = Math.max(0, bounds.maxY - bounds.minY);
-  const extra = [];
-  if (e.type === 'LINE') extra.push(`Comprimento: ${mm(distance({ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }))}`);
-  if (e.type === 'CIRCLE' || e.type === 'ARC') extra.push(`Raio: ${mm(e.r)}`);
-  if (e.points?.length) extra.push(`Vertices: ${e.points.length}`);
+  if (!entityById([...selectedIds][0])) return;
   selectionInfoEl.innerHTML = `
     <div class="metric"><strong>${pieceCode}</strong></div>
-    <div class="metric">Tipo: ${e.type}</div>
-    <div class="metric">Camada: ${e.layer || '0'}</div>
-    <div class="metric">Centro: ${mm(center.x)}, ${mm(center.y)}</div>
-    <div class="metric">Comprimento X: ${mm(widthX)}</div>
-    <div class="metric">Altura Y: ${mm(heightY)}</div>
-    ${extra.map((x) => `<div class="metric">${x}</div>`).join('')}
-    <div class="small">Unidade: milimetros</div>
+    <div class="metric">Tamanho X: ${mm(pieceSize.x)}</div>
+    <div class="metric">Tamanho Y: ${mm(pieceSize.y)}</div>
+    <div class="small">1 peca selecionada.</div>
   `;
 }
 
@@ -472,7 +635,10 @@ function refreshProperties() {
   if (selectedIds.size !== 1) return;
   const e = entityById([...selectedIds][0]);
   if (!e) return;
+  const pieceSize = currentPieceSize();
   propertiesEl.appendChild(makeReadOnlyRow('Codigo da peca', currentPieceCode()));
+  propertiesEl.appendChild(makeReadOnlyRow('Tamanho X (mm)', Number(pieceSize.x).toFixed(2)));
+  propertiesEl.appendChild(makeReadOnlyRow('Tamanho Y (mm)', Number(pieceSize.y).toFixed(2)));
   propertiesEl.appendChild(makeInputRow('Camada', e.layer || '0', (v) => { e.layer = v || '0'; ensureLayers(doc); rebuildScene(); refreshUi(); }, 'text', '1'));
   if (e.type === 'LINE') {
     [['X1', e.x1], ['Y1', e.y1], ['X2', e.x2], ['Y2', e.y2]].forEach(([k, v]) => {
@@ -509,6 +675,7 @@ function setTool(next) {
   toolButtons.forEach((b) => b.classList.toggle('active', b.dataset.tool === next));
   controls.enabled = next !== 'window';
   buildHandles();
+  rebuildMeasurements();
   requestRender();
 }
 
@@ -546,27 +713,11 @@ function windowSelect(startWorld, endWorld, additive = false) {
   setStatus(`${ids.length} peca(s) selecionada(s) por janela.`);
 }
 
-function intersectObjects(clientX, clientY, includeHandles = true) {
-  const rect = renderer.domElement.getBoundingClientRect();
-  mouseNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-  mouseNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-  updateRaycastThreshold();
-  camera.updateMatrixWorld();
-  raycaster.setFromCamera(mouseNdc, camera);
-  if (includeHandles) {
-    const handleHits = raycaster.intersectObjects(handlesRoot.children, false);
-    if (handleHits.length) return { type: 'handle', object: handleHits[0].object };
-  }
-  const objectHits = raycaster.intersectObjects(workRoot.children, false);
-  if (objectHits.length) return { type: 'entity', object: objectHits[0].object };
-  return null;
-}
-
 function hoverHandleNear(clientX, clientY) {
   if (tool !== 'vertex' || !selectedIds.size) return null;
   const world = worldFromClient(clientX, clientY);
   let best = null;
-  const threshold = 6 / camera.zoom;
+  const threshold = pickRadiusWorld(VERTEX_PICK_RADIUS_PX);
   for (const eId of selectedIds) {
     const e = entityById(eId);
     if (!e) continue;
@@ -744,37 +895,21 @@ $('deleteBtn').addEventListener('click', () => {
   rebuildScene(); refreshUi();
 });
 $('rotateBtn').addEventListener('click', () => {
-  if (!selectedIds.size) return;
-  pushUndo('rotacionar');
-  for (const id of selectedIds) {
-    const e = entityById(id);
-    rotateEntity(e, 90, entityCenter(e));
-  }
-  rebuildScene(); refreshUi();
+  rotateSelected(90);
 });
 $('scaleBtn').addEventListener('click', () => {
-  if (!selectedIds.size) return;
-  pushUndo('escalar');
-  for (const id of selectedIds) {
-    const e = entityById(id);
-    scaleEntity(e, 1.1, entityCenter(e));
-  }
-  rebuildScene(); refreshUi();
+  transformSelection('escalar', (entity, pivot) => scaleEntity(entity, 1.1, pivot));
 });
 $('mirrorXBtn').addEventListener('click', () => {
-  if (!selectedIds.size) return;
-  pushUndo('espelhar x');
-  for (const id of selectedIds) mirrorEntity(entityById(id), 'x', entityCenter(entityById(id)));
-  rebuildScene(); refreshUi();
+  transformSelection('espelhar x', (entity, pivot) => mirrorEntity(entity, 'x', pivot));
 });
 $('mirrorYBtn').addEventListener('click', () => {
-  if (!selectedIds.size) return;
-  pushUndo('espelhar y');
-  for (const id of selectedIds) mirrorEntity(entityById(id), 'y', entityCenter(entityById(id)));
-  rebuildScene(); refreshUi();
+  transformSelection('espelhar y', (entity, pivot) => mirrorEntity(entity, 'y', pivot));
 });
-$('undoBtn').addEventListener('click', undo);
-$('redoBtn').addEventListener('click', redo);
+const undoBtn = $('undoBtn');
+const redoBtn = $('redoBtn');
+if (undoBtn) undoBtn.addEventListener('click', undo);
+if (redoBtn) redoBtn.addEventListener('click', redo);
 showGridEl.addEventListener('change', () => { rebuildGrid(); requestRender(); });
 ['snapGrid', 'snapPoints'].forEach((id) => $(id).addEventListener('change', requestRender));
 
@@ -823,6 +958,14 @@ viewport.addEventListener('wheel', (e) => {
 
 window.addEventListener('resize', () => { resize(); rebuildGrid(); updateLabelPositions(); });
 window.addEventListener('keydown', (e) => {
+  const target = e.target;
+  const typing = target && (
+    target.tagName === 'INPUT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT' ||
+    target.isContentEditable
+  );
+  if (typing) return;
   if (e.key === 'Escape') {
     if (selectedIds.size) {
       selectedIds.clear();
@@ -835,6 +978,19 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Delete') {
     if (selectedIds.size) {
       pushUndo('excluir'); deleteSelected(doc, selectedIds); selectedIds.clear(); rebuildScene(); refreshUi();
+    }
+  }
+  if (!e.ctrlKey && !e.metaKey) {
+    const key = String(e.key || '').toLowerCase();
+    if (key === 'e') {
+      e.preventDefault();
+      rotateSelected(90);
+      return;
+    }
+    if (key === 'r') {
+      e.preventDefault();
+      rotateSelected(45);
+      return;
     }
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }

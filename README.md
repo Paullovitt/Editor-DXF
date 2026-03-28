@@ -75,11 +75,20 @@ Solucao:
 - Remocao da opcao `Visivel` na area de camadas.
 - Area de camadas mostra o codigo da peca usando o nome do arquivo DXF (sem `.dxf`).
 - Exibicao de codigo/nome da peca no painel lateral (sem desenhar no canvas).
-- Painel do objeto mostra medidas em mm por eixo (`Comprimento X` e `Altura Y`).
+- Painel do objeto/propriedades mostra o tamanho da peca em `X` e `Y` (mm) logo abaixo do codigo.
+- Painel `Objeto` foi simplificado para exibir apenas codigo, tamanho X e tamanho Y.
+- Selecao por `Janela` em linhas/polilinhas exibe cotas com seta e valor em milimetros no viewport.
+- Handles de vertice reduzidos para melhor leitura da geometria.
+- Pontos amarelos de vertice ajustados para 3x do tamanho base atual.
+- Tolerancia de selecao por mouse ajustada para um raio invisivel pequeno no ponteiro (aprox. 2 px), com adaptacao ao zoom.
 - `Esc` limpa a selecao.
 - Cursor muda para `pointer` quando o mouse se aproxima de geometria selecionavel.
 - Arraste de pecas otimizado para movimento mais fluido (commit no modelo ao soltar o mouse).
 - Zoom da roda do mouse ancorado no ponteiro (o ponto sob o cursor permanece no foco durante o zoom), com suavizacao por frame.
+- Grade estendida para manter o fundo continuo durante navegacao.
+- Rotacionar/Escalar/Espelhar agora aplicam no centro do conjunto selecionado.
+- Atalhos de rotacao: `E` = 90 graus, `R` = 45 graus.
+- Botoes `Undo/Redo` removidos da barra (mantidos atalhos `Ctrl+Z` e `Ctrl+Y`).
 - Exportacao usa o mesmo nome do arquivo original (sem sufixo `_editado`).
 
 ## Licenca
