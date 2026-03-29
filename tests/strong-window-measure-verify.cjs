@@ -104,11 +104,15 @@ async function run() {
     const hasRadius = labels.some((txt) => /^R\s+\d/.test(txt));
     const hasArcLen = labels.some((txt) => /^A\s+\d/.test(txt));
     const hasDiameter = labels.some((txt) => /^D\s+\d/.test(txt));
-    const hasLinear = labels.some((txt) => /^\d/.test(txt) && !/^[RAD]\s/.test(txt));
+    const hasAngle = labels.some((txt) => /^Ang\s+\d/.test(txt));
+    const hasCirc = labels.some((txt) => /^C\s+\d/.test(txt));
+    const hasLinear = labels.some((txt) => /^\d/.test(txt) && !/^[RADC]/.test(txt));
 
     if (!hasRadius) throw new Error(`Medida de raio nao encontrada. Labels: ${labels.join(' | ')}`);
     if (!hasArcLen) throw new Error(`Medida de comprimento de arco nao encontrada. Labels: ${labels.join(' | ')}`);
     if (!hasDiameter) throw new Error(`Medida de diametro nao encontrada. Labels: ${labels.join(' | ')}`);
+    if (!hasAngle) throw new Error(`Medida angular (graus) nao encontrada. Labels: ${labels.join(' | ')}`);
+    if (!hasCirc) throw new Error(`Medida de circunferencia nao encontrada. Labels: ${labels.join(' | ')}`);
     if (!hasLinear) throw new Error(`Medida linear de linha nao encontrada. Labels: ${labels.join(' | ')}`);
 
     console.log(`OK strong window verify: ${labels.length} labels renderizadas (${labels.join(' | ')}).`);

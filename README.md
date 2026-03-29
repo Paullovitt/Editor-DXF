@@ -81,7 +81,8 @@ Solucao:
 - Exibicao de codigo/nome da peca no painel lateral (sem desenhar no canvas).
 - Painel do objeto/propriedades mostra o tamanho da peca em `X` e `Y` (mm) logo abaixo do codigo.
 - Painel `Objeto` foi simplificado para exibir apenas codigo, tamanho X e tamanho Y.
-- Selecao por `Janela` exibe cotas no viewport para linhas/polilinhas e tambem medidas adequadas para geometrias curvas: `D` (diametro) em circulos, `R` (raio) e `A` (comprimento de arco) em arcos/cantos.
+- Selecao por `Janela` exibe cotas no viewport para linhas/polilinhas e tambem medidas adequadas para geometrias curvas: `R` (raio), `D` (diametro), `C` (circunferencia), `Ang` (graus) e `A` (comprimento de arco) em circulos/arcos/cantos.
+- No modo `Janela`, clique simples sobre a geometria agora tambem seleciona 1 vertice/linha (sem precisar arrastar retangulo).
 - Handles de vertice reduzidos para melhor leitura da geometria.
 - Pontos amarelos de vertice ajustados para 2.1x do tamanho base atual.
 - Nos modos `Selecionar` e `Vertices`, o painel `Propriedades` nao exibe campos de edicao.

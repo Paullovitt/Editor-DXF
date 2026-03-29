@@ -110,6 +110,7 @@ const HANDLE_BASE_RADIUS = 1.25;
 function setStatus(msg) { statusbar.textContent = msg; }
 function requestRender() { needsRender = true; }
 function mm(v) { return `${Number(v || 0).toFixed(2)} mm`; }
+function deg(v) { return `${Number(v || 0).toFixed(2)} deg`; }
 function entityById(id) { return doc.entities.find((e) => e.id === id); }
 function sameHandleRef(a, b) {
   if (!a || !b) return false;
@@ -1235,9 +1236,9 @@ function collectMeasurementItems() {
   return items.slice(0, MAX_ITEMS);
 }
 
-function addMeasurementLabel(worldPos, text) {
+function addMeasurementLabel(worldPos, text, kind = 'linear') {
   const el = document.createElement('div');
-  el.className = 'measure-label';
+  el.className = `measure-label measure-label--${kind}`;
   el.textContent = text;
   labelsLayer.appendChild(el);
   measurementLabels.push({ el, worldPos });
@@ -1253,7 +1254,7 @@ function rebuildMeasurements() {
     points.push(new THREE.Vector3(a.x, a.y, 2.2), new THREE.Vector3(b.x, b.y, 2.2));
   };
 
-  const drawLinearDimension = (start, end, labelText = null) => {
+  const drawLinearDimension = (start, end, labelText = null, labelKind = 'linear') => {
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const len = Math.hypot(dx, dy);
@@ -1286,10 +1287,10 @@ function rebuildMeasurements() {
     pushSegment(b, bRight);
 
     const labelPos = { x: (a.x + b.x) / 2 + nx * (4 / camera.zoom), y: (a.y + b.y) / 2 + ny * (4 / camera.zoom) };
-    addMeasurementLabel(labelPos, labelText || mm(len));
+    addMeasurementLabel(labelPos, labelText || mm(len), labelKind);
   };
 
-  const drawRadiusLeader = (center, radius, angleRad, labelText) => {
+  const drawRadiusLeader = (center, radius, angleRad, labelText, labelKind = 'radius') => {
     if (radius < 1e-6) return;
     const ux = Math.cos(angleRad);
     const uy = Math.sin(angleRad);
@@ -1307,7 +1308,7 @@ function rebuildMeasurements() {
     const tickB = { x: anchor.x - nx * tick, y: anchor.y - ny * tick };
     pushSegment(tickA, tickB);
 
-    addMeasurementLabel({ x: leader.x + ux * (3 / camera.zoom), y: leader.y + uy * (3 / camera.zoom) }, labelText);
+    addMeasurementLabel({ x: leader.x + ux * (3 / camera.zoom), y: leader.y + uy * (3 / camera.zoom) }, labelText, labelKind);
   };
 
   const drawArcLengthTag = (arcItem) => {
@@ -1325,7 +1326,29 @@ function rebuildMeasurements() {
     pushSegment(anchor, guide);
 
     const arcLen = arcItem.r * sweep;
-    addMeasurementLabel({ x: guide.x + ux * (3 / camera.zoom), y: guide.y + uy * (3 / camera.zoom) }, `A ${mm(arcLen)}`);
+    addMeasurementLabel({ x: guide.x + ux * (3 / camera.zoom), y: guide.y + uy * (3 / camera.zoom) }, `A ${mm(arcLen)}`, 'arc');
+  };
+
+  const drawArcAngleTag = (arcItem) => {
+    const startRad = THREE.MathUtils.degToRad(arcItem.startAngle);
+    const endRad = THREE.MathUtils.degToRad(arcItem.endAngle);
+    const sweep = normalizeRad(endRad - startRad);
+    if (sweep < 1e-6) return;
+
+    const mid = startRad + sweep / 2;
+    const ux = Math.cos(mid);
+    const uy = Math.sin(mid);
+    const anchor = { x: arcItem.cx + ux * Math.max(arcItem.r * 0.55, 2), y: arcItem.cy + uy * Math.max(arcItem.r * 0.55, 2) };
+    addMeasurementLabel(anchor, `Ang ${deg(THREE.MathUtils.radToDeg(sweep))}`, 'angle');
+  };
+
+  const drawCircleCircumferenceTag = (circleItem) => {
+    const uy = -1;
+    const anchor = { x: circleItem.cx, y: circleItem.cy + uy * circleItem.r };
+    const ext = Math.max(10 / camera.zoom, circleItem.r * 0.2);
+    const guide = { x: anchor.x, y: anchor.y + uy * ext };
+    pushSegment(anchor, guide);
+    addMeasurementLabel({ x: guide.x, y: guide.y + uy * (3 / camera.zoom) }, `C ${mm(Math.PI * 2 * circleItem.r)}`, 'circ');
   };
 
   for (const item of items) {
@@ -1336,8 +1359,10 @@ function rebuildMeasurements() {
     if (item.kind === 'circle') {
       const left = { x: item.cx - item.r, y: item.cy };
       const right = { x: item.cx + item.r, y: item.cy };
-      drawLinearDimension(left, right, `D ${mm(item.r * 2)}`);
-      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, Math.PI / 4, `R ${mm(item.r)}`);
+      drawLinearDimension(left, right, `D ${mm(item.r * 2)}`, 'diameter');
+      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, Math.PI / 4, `R ${mm(item.r)}`, 'radius');
+      addMeasurementLabel({ x: item.cx + item.r * 0.2, y: item.cy }, `Ang ${deg(360)}`, 'angle');
+      drawCircleCircumferenceTag(item);
       continue;
     }
     if (item.kind === 'arc') {
@@ -1345,7 +1370,8 @@ function rebuildMeasurements() {
       const endRad = THREE.MathUtils.degToRad(item.endAngle);
       const sweep = normalizeRad(endRad - startRad);
       const mid = startRad + sweep / 2;
-      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, mid, `R ${mm(item.r)}`);
+      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, mid, `R ${mm(item.r)}`, 'radius');
+      drawArcAngleTag(item);
       drawArcLengthTag(item);
     }
   }
@@ -1574,6 +1600,36 @@ function windowSelect(startWorld, endWorld, additive = false) {
   setStatus(`${ids.length} peca(s) selecionada(s) por janela.`);
 }
 
+function windowPickSelect(clientX, clientY, additive = false) {
+  const hit = intersectObjects(clientX, clientY, false);
+  const entityId = hit?.type === 'entity' ? hit.object.userData.entityId : null;
+  if (!entityId) {
+    if (!additive) selectedIds.clear();
+    setHoveredHandle(null);
+    setActiveHandle(null);
+    rebuildScene();
+    refreshUi();
+    updateRectangleDraftPreview();
+    setStatus('Janela: nenhum vertice/linha encontrado no clique.');
+    return;
+  }
+  const entity = entityById(entityId);
+  if (!isEntityEditable(doc, entity)) return;
+
+  if (additive) {
+    if (selectedIds.has(entityId)) selectedIds.delete(entityId);
+    else selectedIds.add(entityId);
+  } else {
+    selectedIds = new Set([entityId]);
+  }
+  setHoveredHandle(null);
+  setActiveHandle(null);
+  rebuildScene();
+  refreshUi();
+  updateRectangleDraftPreview();
+  setStatus(`Janela: ${selectedIds.size} vertice(s)/linha(s) selecionada(s) por clique.`);
+}
+
 function collectVertexCandidates(entity) {
   const pts = [];
   if (entity.type === 'LINE') {
@@ -1791,8 +1847,15 @@ function moveDrag(clientX, clientY) {
 function endDrag(clientX, clientY) {
   if (!dragState) return;
   if (dragState.type === 'window') {
-    const endWorld = worldFromClient(clientX, clientY);
-    windowSelect(dragState.startWorld, endWorld, Boolean(dragState.additive));
+    const start = dragState.startClient;
+    const end = clientToLocal(clientX, clientY);
+    const dragPx = Math.hypot(end.x - start.x, end.y - start.y);
+    if (dragPx <= 6) {
+      windowPickSelect(clientX, clientY, Boolean(dragState.additive));
+    } else {
+      const endWorld = worldFromClient(clientX, clientY);
+      windowSelect(dragState.startWorld, endWorld, Boolean(dragState.additive));
+    }
     hideSelectionRect();
   } else if (dragState.type === 'move') {
     if (dragState.totalDx !== 0 || dragState.totalDy !== 0) {

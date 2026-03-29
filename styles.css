@@ -54,6 +54,35 @@ button:hover, .button:hover { border-color: var(--accent); }
   white-space: nowrap;
   box-shadow: 0 0 0 1px rgba(2, 6, 23, 0.4) inset;
 }
+.measure-label--linear {
+  border-color: #60a5fa;
+  color: #dbeafe;
+}
+.measure-label--diameter {
+  border-color: #f59e0b;
+  color: #fef3c7;
+  background: rgba(69, 26, 3, 0.8);
+}
+.measure-label--radius {
+  border-color: #22d3ee;
+  color: #cffafe;
+  background: rgba(8, 47, 73, 0.8);
+}
+.measure-label--angle {
+  border-color: #c084fc;
+  color: #f3e8ff;
+  background: rgba(59, 7, 100, 0.78);
+}
+.measure-label--arc {
+  border-color: #67e8f9;
+  color: #ecfeff;
+  background: rgba(22, 78, 99, 0.78);
+}
+.measure-label--circ {
+  border-color: #34d399;
+  color: #d1fae5;
+  background: rgba(6, 78, 59, 0.78);
+}
 #selectionRect {
   position: absolute; display: none; border: 1px dashed var(--accent); background: rgba(56, 189, 248, 0.12); pointer-events: none;
 }
