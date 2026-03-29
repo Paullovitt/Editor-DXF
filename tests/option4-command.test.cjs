@@ -18,22 +18,22 @@ test('opcao 4 registra slot e handler', () => {
   assert.match(appSource, /const opened = openLinkCommand\(\);/);
 });
 
-test('painel da opcao 4 contem os dois modos de ligacao', () => {
+test('painel da opcao 4 contem os modos e controles de linha livre X/Y', () => {
   assert.ok(htmlSource.includes('id="linkCommandPanel"'));
   assert.ok(htmlSource.includes('data-link-mode="orthXY"'));
   assert.ok(htmlSource.includes('data-link-mode="free"'));
   assert.ok(htmlSource.includes('data-link-mode="axisFree"'));
-  assert.ok(htmlSource.includes('id="linkAxisValue"'));
-  assert.ok(htmlSource.includes('id="linkAxisXBtn"'));
-  assert.ok(htmlSource.includes('id="linkAxisYBtn"'));
+  assert.ok(htmlSource.includes('id="linkAxisXValue"'));
+  assert.ok(htmlSource.includes('id="linkAxisYValue"'));
   assert.ok(htmlSource.includes('id="linkAxisApplyBtn"'));
   assert.ok(htmlSource.includes('id="linkClearStartBtn"'));
 });
 
-test('opcao 4 limita clique a vertices de poligonos', () => {
+test('opcao 4 usa pick por ponto em vertices e segmentos de linhas/poligonos', () => {
   assert.match(appSource, /function isPolygonEntity\(entity\)/);
   assert.match(appSource, /function isLinkTargetEntity\(entity\)/);
-  assert.match(appSource, /function findPolygonVertexPick\(clientX, clientY\)/);
+  assert.match(appSource, /function findLinkPointPick\(clientX, clientY\)/);
+  assert.match(appSource, /function collectLinkPickSegments\(entity\)/);
   assert.match(appSource, /function buildLinkEntitiesFromPicks\(startPick, endPick, modeId\)/);
   assert.match(appSource, /function handleLinkCanvasPick\(clientX, clientY\)/);
   assert.match(appSource, /function applyLinkAxisLine\(\)/);

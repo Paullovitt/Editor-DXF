@@ -165,24 +165,27 @@ async function run() {
     await clickUntilStatus(page, regionAttempts(0.26, 0.44, 0.56, 0.74), /ponto inicial definido/i, 'Nao conseguiu definir ponto inicial da ligacao solta');
     await clickUntilStatus(page, regionAttempts(0.56, 0.74, 0.26, 0.44), /ligacao\(oes\) criada\(s\) no modo Reta solta/i, 'Nao conseguiu concluir ligacao solta');
 
-    // Modo linha livre X/Y: origem por clique em qualquer ponto e criacao por valor assinado.
+    // Modo linha livre X/Y: origem por clique e aplicacao por Enter nos campos X/Y com Tab.
     await page.click('.link-type-btn[data-link-mode="axisFree"]');
-    await clickAtFraction(page, 0.50, 0.50);
+    await clickAtFraction(page, 0.34, 0.34);
     await page.waitForFunction(() => {
       const status = document.getElementById('statusbar');
       return /origem definida/i.test(status?.textContent || '');
     });
-    await page.click('#linkAxisXBtn');
-    await page.fill('#linkAxisValue', '200');
-    await page.click('#linkAxisApplyBtn');
+
+    await page.click('#linkAxisXValue');
+    await page.fill('#linkAxisXValue', '200');
+    await page.keyboard.press('Enter');
     await page.waitForFunction(() => {
       const status = document.getElementById('statusbar');
       return /linha livre criada no eixo X com 200\.00 mm/i.test(status?.textContent || '');
     });
 
-    await page.click('#linkAxisYBtn');
-    await page.fill('#linkAxisValue', '-200');
-    await page.click('#linkAxisApplyBtn');
+    await page.click('#linkAxisXValue');
+    await page.keyboard.press('Tab');
+    await page.waitForFunction(() => document.activeElement?.id === 'linkAxisYValue');
+    await page.fill('#linkAxisYValue', '-200');
+    await page.keyboard.press('Enter');
     await page.waitForFunction(() => {
       const status = document.getElementById('statusbar');
       return /linha livre criada no eixo Y com -200\.00 mm/i.test(status?.textContent || '');

@@ -399,17 +399,19 @@ button:hover, .button:hover { border-color: var(--accent); }
   gap: 8px;
   margin-bottom: 8px;
 }
-.link-axis-row {
-  display: grid;
-  grid-template-columns: auto 120px;
-  align-items: center;
-  gap: 8px;
-}
-.link-axis-row label {
+.link-axis-label {
   font-size: 12px;
   color: #cbd5e1;
 }
-.link-axis-row input {
+.link-axis-row {
+  display: grid;
+  gap: 8px;
+}
+.link-axis-row--inputs {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+}
+.link-axis-input {
   width: 100%;
   background: #0b1325;
   border: 1px solid #334155;
@@ -417,20 +419,18 @@ button:hover, .button:hover { border-color: var(--accent); }
   border-radius: 8px;
   padding: 6px 8px;
 }
-.link-axis-row input:focus {
+.link-axis-input:focus {
   outline: 2px solid #38bdf8;
   outline-offset: 1px;
 }
-.link-axis-row--buttons {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.link-axis-btn {
-  padding: 6px 8px;
-}
-.link-axis-btn.is-active {
+.link-axis-input.is-active {
   border-color: #22d3ee;
   box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.3) inset;
   background: #122740;
+}
+#linkAxisApplyBtn {
+  padding: 6px 10px;
+  white-space: nowrap;
 }
 .corner-command-head {
   display: flex;
@@ -637,9 +637,6 @@ button:hover, .button:hover { border-color: var(--accent); }
   }
   .link-axis-row {
     grid-template-columns: 1fr;
-  }
-  .link-axis-row--buttons {
-    grid-template-columns: 1fr 1fr 1fr;
   }
   .corner-command-panel {
     min-width: min(96vw, 560px);

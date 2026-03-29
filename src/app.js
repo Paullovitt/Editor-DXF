@@ -35,9 +35,8 @@ const linkClearStartBtnEl = $('linkClearStartBtn');
 const linkSelectionInfoEl = $('linkSelectionInfo');
 const linkTypeButtons = [...document.querySelectorAll('.link-type-btn')];
 const linkAxisControlsEl = $('linkAxisControls');
-const linkAxisValueEl = $('linkAxisValue');
-const linkAxisXBtnEl = $('linkAxisXBtn');
-const linkAxisYBtnEl = $('linkAxisYBtn');
+const linkAxisXValueEl = $('linkAxisXValue');
+const linkAxisYValueEl = $('linkAxisYValue');
 const linkAxisApplyBtnEl = $('linkAxisApplyBtn');
 const cornerCommandPanelEl = $('cornerCommandPanel');
 const cornerSizeEl = $('cornerSize');
@@ -254,7 +253,7 @@ actionSlotsController.setSlotMeta(4, {
 actionSlotsController.registerHandler(4, () => {
   const opened = openLinkCommand();
   return opened
-    ? { ok: true, detail: 'Opcao 4 ativa: clique nos vertices dos poligonos para criar ligacoes.' }
+    ? { ok: true, detail: 'Opcao 4 ativa: clique em pontos de linhas/poligonos para criar ligacoes.' }
     : { ok: false, detail: 'Nao foi possivel abrir a Opcao 4.' };
 });
 function selectionPivot() {
@@ -1109,15 +1108,25 @@ function updateLinkTypeButtons() {
   }
 }
 
-function updateLinkAxisButtons() {
-  if (linkAxisXBtnEl) linkAxisXBtnEl.classList.toggle('is-active', linkAxis === 'x');
-  if (linkAxisYBtnEl) linkAxisYBtnEl.classList.toggle('is-active', linkAxis === 'y');
+function linkAxisInputEl(axisId) {
+  return axisId === 'y' ? linkAxisYValueEl : linkAxisXValueEl;
 }
 
-function setLinkAxis(axisId) {
+function updateLinkAxisInputs() {
+  if (linkAxisXValueEl) linkAxisXValueEl.classList.toggle('is-active', linkAxis === 'x');
+  if (linkAxisYValueEl) linkAxisYValueEl.classList.toggle('is-active', linkAxis === 'y');
+}
+
+function setLinkAxis(axisId, options = {}) {
+  const { focusInput = false } = options;
   if (!LINK_AXIS_IDS.has(axisId)) return;
   linkAxis = axisId;
-  updateLinkAxisButtons();
+  updateLinkAxisInputs();
+  if (focusInput) {
+    const inputEl = linkAxisInputEl(axisId);
+    inputEl?.focus();
+    inputEl?.select();
+  }
   updateLinkSelectionInfo();
 }
 
@@ -1159,6 +1168,53 @@ function collectLinkPickPoints(entity) {
   return [];
 }
 
+function collectLinkPickSegments(entity) {
+  if (!entity) return [];
+  if (entity.type === 'LINE') {
+    return [{
+      segmentIndex: 0,
+      start: { x: Number(entity.x1) || 0, y: Number(entity.y1) || 0 },
+      end: { x: Number(entity.x2) || 0, y: Number(entity.y2) || 0 },
+    }];
+  }
+  if (entity.points?.length >= 2) {
+    const segments = [];
+    for (let i = 1; i < entity.points.length; i += 1) {
+      segments.push({
+        segmentIndex: i - 1,
+        start: { x: Number(entity.points[i - 1].x) || 0, y: Number(entity.points[i - 1].y) || 0 },
+        end: { x: Number(entity.points[i].x) || 0, y: Number(entity.points[i].y) || 0 },
+      });
+    }
+    if (entity.closed && entity.points.length > 2) {
+      segments.push({
+        segmentIndex: entity.points.length - 1,
+        start: { x: Number(entity.points[entity.points.length - 1].x) || 0, y: Number(entity.points[entity.points.length - 1].y) || 0 },
+        end: { x: Number(entity.points[0].x) || 0, y: Number(entity.points[0].y) || 0 },
+      });
+    }
+    return segments;
+  }
+  return [];
+}
+
+function projectPointOnSegment(point, start, end) {
+  const sx = Number(start?.x) || 0;
+  const sy = Number(start?.y) || 0;
+  const ex = Number(end?.x) || 0;
+  const ey = Number(end?.y) || 0;
+  const dx = ex - sx;
+  const dy = ey - sy;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq <= 1e-12) {
+    const projectedPoint = { x: sx, y: sy };
+    return { point: projectedPoint, t: 0, d: distance(point, projectedPoint) };
+  }
+  const t = clampValue((((point.x - sx) * dx) + ((point.y - sy) * dy)) / lenSq, 0, 1);
+  const projectedPoint = { x: sx + (dx * t), y: sy + (dy * t) };
+  return { point: projectedPoint, t, d: distance(point, projectedPoint) };
+}
+
 function syncLinkPolygonSelection(options = {}) {
   const { keepStart = false } = options;
   const targets = getVisiblePolygonEntities();
@@ -1178,11 +1234,12 @@ function updateLinkSelectionInfo() {
   const targetCount = getVisiblePolygonEntities().length;
   if (linkMode === 'axisFree') {
     const axisText = linkAxis === 'x' ? 'X' : 'Y';
-    const valueText = Number(linkAxisValueEl?.value || 0).toFixed(2);
+    const xValue = Number(linkAxisXValueEl?.value || 0).toFixed(2);
+    const yValue = Number(linkAxisYValueEl?.value || 0).toFixed(2);
     const anchorText = linkAxisAnchor
       ? `Origem: (${linkAxisAnchor.x.toFixed(2)}, ${linkAxisAnchor.y.toFixed(2)})`
       : 'Origem: clique no canvas';
-    linkSelectionInfoEl.textContent = `Modo ${linkModeLabel(linkMode)}. Eixo ${axisText}. Valor ${valueText} mm. ${anchorText}.`;
+    linkSelectionInfoEl.textContent = `Modo ${linkModeLabel(linkMode)}. Eixo ativo ${axisText}. X ${xValue} mm, Y ${yValue} mm. ${anchorText}.`;
     return;
   }
 
@@ -1192,7 +1249,7 @@ function updateLinkSelectionInfo() {
   }
 
   const startText = linkStartPick
-    ? `Inicio: ${linkStartPick.entityId}, vertice ${Number(linkStartPick.vertexIndex) + 1}.`
+    ? `Inicio: (${linkStartPick.point.x.toFixed(2)}, ${linkStartPick.point.y.toFixed(2)}) ${linkStartPick.sourceType === 'vertex' ? `(vertice ${Number(linkStartPick.vertexIndex) + 1})` : '(segmento da linha)'}.`
     : 'Inicio: nao definido.';
   linkSelectionInfoEl.textContent = `${targetCount} alvo(s) pronto(s). Modo ${linkModeLabel(linkMode)}. ${startText}`;
 }
@@ -1206,24 +1263,47 @@ function resetLinkStart(options = {}) {
   if (!silent) setStatus('Opcao 4: origem limpa. Defina novamente.');
 }
 
-function findPolygonVertexPick(clientX, clientY) {
-  const world = worldFromClient(clientX, clientY);
+function findLinkPointPick(clientX, clientY) {
+  // Respeita o mesmo snap global (grade/pontos) usado nas outras ferramentas.
+  const world = snapWorld(worldFromClient(clientX, clientY));
   const threshold = pickRadiusWorld(LINK_PICK_RADIUS_PX);
   let best = null;
+
+  // Prioriza vertice quando o clique estiver perto de vertice e segmento ao mesmo tempo.
+  function evaluateCandidate(entity, layerName, candidatePoint, sourceType, extra = {}) {
+    const d = distance(world, candidatePoint);
+    if (d > threshold) return;
+    const priority = sourceType === 'vertex' ? 0 : 1;
+    if (!best || priority < best.priority || (priority === best.priority && d < best.d)) {
+      best = {
+        entityId: entity.id,
+        layer: layerName,
+        point: { x: candidatePoint.x, y: candidatePoint.y },
+        sourceType,
+        vertexIndex: sourceType === 'vertex' ? Number(extra.vertexIndex) : null,
+        segmentIndex: sourceType === 'segment' ? Number(extra.segmentIndex) : null,
+        d,
+        priority,
+      };
+    }
+  }
+
   for (const entity of getVisiblePolygonEntities()) {
-    const candidates = collectLinkPickPoints(entity);
-    for (const candidate of candidates) {
-      const d = distance(world, candidate.point);
-      if (d > threshold) continue;
-      if (!best || d < best.d) {
-        best = {
-          entityId: entity.id,
-          vertexIndex: candidate.vertexIndex,
-          point: { x: candidate.point.x, y: candidate.point.y },
-          layer: entity.layer || '0',
-          d,
-        };
-      }
+    const layerName = entity.layer || '0';
+    const vertexCandidates = collectLinkPickPoints(entity);
+    for (const candidate of vertexCandidates) {
+      evaluateCandidate(entity, layerName, candidate.point, 'vertex', { vertexIndex: candidate.vertexIndex });
+    }
+
+    const segmentCandidates = collectLinkPickSegments(entity);
+    for (const segment of segmentCandidates) {
+      const minX = Math.min(segment.start.x, segment.end.x) - threshold;
+      const maxX = Math.max(segment.start.x, segment.end.x) + threshold;
+      const minY = Math.min(segment.start.y, segment.end.y) - threshold;
+      const maxY = Math.max(segment.start.y, segment.end.y) + threshold;
+      if (world.x < minX || world.x > maxX || world.y < minY || world.y > maxY) continue;
+      const projected = projectPointOnSegment(world, segment.start, segment.end);
+      evaluateCandidate(entity, layerName, projected.point, 'segment', { segmentIndex: segment.segmentIndex });
     }
   }
   return best;
@@ -1251,31 +1331,37 @@ function buildLinkEntitiesFromPicks(startPick, endPick, modeId) {
 }
 
 function applyLinkAxisLine() {
+  const axisId = LINK_AXIS_IDS.has(linkAxis) ? linkAxis : 'x';
+  const axisLabel = axisId.toUpperCase();
+  const axisInputEl = linkAxisInputEl(axisId);
   if (!linkAxisAnchor) {
-    setStatus('Opcao 4: clique no canvas para definir a origem da linha livre.');
+    setStatus('Opcao 4: clique em um ponto do canvas/peca para definir a origem da linha livre.');
     return false;
   }
-  const valueMm = Number(String(linkAxisValueEl?.value ?? '').replace(',', '.'));
+  const valueMm = Number(String(axisInputEl?.value ?? '').replace(',', '.'));
   if (!Number.isFinite(valueMm) || Math.abs(valueMm) <= 1e-9) {
-    setStatus('Opcao 4: informe um valor X/Y valido (positivo ou negativo, exceto zero).');
-    linkAxisValueEl?.focus();
-    linkAxisValueEl?.select();
+    setStatus(`Opcao 4: informe um valor valido no eixo ${axisLabel} (positivo ou negativo, exceto zero).`);
+    axisInputEl?.focus();
+    axisInputEl?.select();
     return false;
   }
   const start = { x: linkAxisAnchor.x, y: linkAxisAnchor.y };
   const end = {
-    x: start.x + (linkAxis === 'x' ? valueMm : 0),
-    y: start.y + (linkAxis === 'y' ? valueMm : 0),
+    x: start.x + (axisId === 'x' ? valueMm : 0),
+    y: start.y + (axisId === 'y' ? valueMm : 0),
   };
-  const line = createLinkLineEntity(start, end, '0', `Linha livre ${linkAxis.toUpperCase()} ${valueMm.toFixed(2)}mm`);
+  const line = createLinkLineEntity(start, end, '0', `Linha livre ${axisLabel} ${valueMm.toFixed(2)}mm`);
   pushUndo('opcao 4 - linha livre x/y');
   doc.entities.push(line);
   ensureLayers(doc);
   selectedIds.add(line.id);
+  // Mantem fluxo encadeado: o proximo Enter continua da ponta da linha recem-criada.
+  linkAxisAnchor = { x: end.x, y: end.y };
   rebuildScene();
   refreshUi();
+  updateLinkSelectionInfo();
   requestRender();
-  setStatus(`Opcao 4: linha livre criada no eixo ${linkAxis.toUpperCase()} com ${valueMm.toFixed(2)} mm.`);
+  setStatus(`Opcao 4: linha livre criada no eixo ${axisLabel} com ${valueMm.toFixed(2)} mm (continua da ultima ponta).`);
   return true;
 }
 
@@ -1292,7 +1378,11 @@ function applyLinkFromPick(endPick) {
   ensureLayers(doc);
   syncLinkPolygonSelection({ keepStart: true });
   linkStartPick = endPick;
-  setActiveHandle({ entityId: endPick.entityId, vertexIndex: endPick.vertexIndex });
+  if (endPick.sourceType === 'vertex' && Number.isInteger(endPick.vertexIndex)) {
+    setActiveHandle({ entityId: endPick.entityId, vertexIndex: endPick.vertexIndex });
+  } else {
+    setActiveHandle(null);
+  }
   updateLinkSelectionInfo();
   requestRender();
   setStatus(`Opcao 4: ${segments.length} ligacao(oes) criada(s) no modo ${linkModeLabel(linkMode)}.`);
@@ -1302,30 +1392,39 @@ function applyLinkFromPick(endPick) {
 function handleLinkCanvasPick(clientX, clientY) {
   if (!linkCommandOpen) return false;
   if (linkMode === 'axisFree') {
-    const anchor = snapWorld(worldFromClient(clientX, clientY));
+    const pick = findLinkPointPick(clientX, clientY);
+    const anchor = pick ? pick.point : snapWorld(worldFromClient(clientX, clientY));
     linkAxisAnchor = { x: anchor.x, y: anchor.y };
+    if (pick?.sourceType === 'vertex' && Number.isInteger(pick.vertexIndex)) {
+      setActiveHandle({ entityId: pick.entityId, vertexIndex: pick.vertexIndex });
+    } else {
+      setActiveHandle(null);
+    }
     setHoveredHandle(null);
-    setActiveHandle(null);
     updateLinkSelectionInfo();
-    setStatus(`Opcao 4: origem definida em (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}). Escolha eixo e valor.`);
+    setStatus(`Opcao 4: origem definida em (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}). Digite X ou Y e pressione Enter.`);
     return true;
   }
-  const pick = findPolygonVertexPick(clientX, clientY);
+  const pick = findLinkPointPick(clientX, clientY);
   if (!pick) {
-    setStatus('Opcao 4: clique em um vertice de linha/poligono.');
+    setStatus('Opcao 4: clique em um ponto de linha/poligono.');
     return true;
   }
 
   if (!linkStartPick) {
     linkStartPick = pick;
-    setActiveHandle({ entityId: pick.entityId, vertexIndex: pick.vertexIndex });
+    if (pick.sourceType === 'vertex' && Number.isInteger(pick.vertexIndex)) {
+      setActiveHandle({ entityId: pick.entityId, vertexIndex: pick.vertexIndex });
+    } else {
+      setActiveHandle(null);
+    }
     updateLinkSelectionInfo();
     setStatus('Opcao 4: ponto inicial definido. Selecione o destino.');
     return true;
   }
 
-  if (pick.entityId === linkStartPick.entityId && pick.vertexIndex === linkStartPick.vertexIndex) {
-    setStatus('Opcao 4: selecione um vertice diferente para concluir a ligacao.');
+  if (distance(pick.point, linkStartPick.point) <= 1e-6) {
+    setStatus('Opcao 4: selecione um ponto diferente para concluir a ligacao.');
     return true;
   }
   applyLinkFromPick(pick);
@@ -1352,15 +1451,18 @@ function openLinkCommand() {
   linkAxisAnchor = null;
   linkCommandPanelEl.hidden = false;
   actionSlotsController.setActiveSlot(4);
-  if (!Number.isFinite(Number(linkAxisValueEl?.value))) {
-    if (linkAxisValueEl) linkAxisValueEl.value = String(LINK_AXIS_DEFAULT_MM);
+  if (!Number.isFinite(Number(linkAxisXValueEl?.value))) {
+    if (linkAxisXValueEl) linkAxisXValueEl.value = String(LINK_AXIS_DEFAULT_MM);
+  }
+  if (!Number.isFinite(Number(linkAxisYValueEl?.value))) {
+    if (linkAxisYValueEl) linkAxisYValueEl.value = String(LINK_AXIS_DEFAULT_MM);
   }
   setLinkMode(linkMode);
   setLinkAxis(linkAxis);
   if (tool !== 'vertex') setTool('vertex');
   syncLinkPolygonSelection({ keepStart: false });
   updateLinkSelectionInfo();
-  setStatus('Opcao 4: escolha modo e clique para ligar (ou defina origem para linha livre X/Y).');
+  setStatus('Opcao 4: escolha modo e clique para ligar. Na Linha livre X/Y, Enter aplica no eixo ativo.');
   return true;
 }
 
@@ -3014,22 +3116,24 @@ for (const button of linkTypeButtons) {
 if (linkClearStartBtnEl) {
   linkClearStartBtnEl.addEventListener('click', () => resetLinkStart());
 }
-if (linkAxisXBtnEl) {
-  linkAxisXBtnEl.addEventListener('click', () => {
-    setLinkAxis('x');
-    setStatus('Opcao 4: eixo X selecionado.');
-  });
-}
-if (linkAxisYBtnEl) {
-  linkAxisYBtnEl.addEventListener('click', () => {
-    setLinkAxis('y');
-    setStatus('Opcao 4: eixo Y selecionado.');
-  });
-}
-if (linkAxisValueEl) {
-  linkAxisValueEl.addEventListener('keydown', (e) => {
+if (linkAxisXValueEl) {
+  linkAxisXValueEl.addEventListener('focus', () => setLinkAxis('x'));
+  linkAxisXValueEl.addEventListener('pointerdown', () => setLinkAxis('x'));
+  linkAxisXValueEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
+      setLinkAxis('x');
+      applyLinkAxisLine();
+    }
+  });
+}
+if (linkAxisYValueEl) {
+  linkAxisYValueEl.addEventListener('focus', () => setLinkAxis('y'));
+  linkAxisYValueEl.addEventListener('pointerdown', () => setLinkAxis('y'));
+  linkAxisYValueEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      setLinkAxis('y');
       applyLinkAxisLine();
     }
   });
@@ -3083,19 +3187,13 @@ viewport.addEventListener('pointermove', (e) => {
     return;
   }
   if (linkCommandOpen) {
-    if (linkMode === 'axisFree') {
-      setHoveredHandle(null);
-      viewport.style.cursor = 'crosshair';
+    const pick = findLinkPointPick(e.clientX, e.clientY);
+    if (pick?.sourceType === 'vertex' && Number.isInteger(pick.vertexIndex)) {
+      setHoveredHandle({ entityId: pick.entityId, vertexIndex: pick.vertexIndex });
     } else {
-      const pick = findPolygonVertexPick(e.clientX, e.clientY);
-      if (pick) {
-        setHoveredHandle({ entityId: pick.entityId, vertexIndex: pick.vertexIndex });
-        viewport.style.cursor = 'pointer';
-      } else {
-        setHoveredHandle(null);
-        viewport.style.cursor = 'crosshair';
-      }
+      setHoveredHandle(null);
     }
+    viewport.style.cursor = pick ? 'pointer' : 'crosshair';
     return;
   }
   if (tool === 'vertex') {
@@ -3253,7 +3351,7 @@ renderActionSlots();
 renderActionCard();
 updateOption3TypeButtons();
 updateLinkTypeButtons();
-updateLinkAxisButtons();
+updateLinkAxisInputs();
 updateCornerTypeButtons();
 updateCornerSelectionInfo();
 updateLinkSelectionInfo();

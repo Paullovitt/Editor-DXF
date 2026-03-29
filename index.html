@@ -194,20 +194,18 @@
             </button>
           </div>
           <div id="linkAxisControls" class="link-axis-controls" hidden>
-            <div class="link-axis-row">
-              <label for="linkAxisValue">Valor eixo (mm)</label>
-              <input id="linkAxisValue" type="number" step="0.01" value="200" autocomplete="off" />
-            </div>
-            <div class="link-axis-row link-axis-row--buttons">
-              <button id="linkAxisXBtn" type="button" class="link-axis-btn is-active">X</button>
-              <button id="linkAxisYBtn" type="button" class="link-axis-btn">Y</button>
+            <label class="link-axis-label" for="linkAxisXValue">Valor eixo (mm)</label>
+            <div class="link-axis-row link-axis-row--inputs">
+              <input id="linkAxisXValue" class="link-axis-input is-active" type="number" step="0.01" value="200" placeholder="X" autocomplete="off" aria-label="Valor X em milimetros" />
+              <input id="linkAxisYValue" class="link-axis-input" type="number" step="0.01" value="200" placeholder="Y" autocomplete="off" aria-label="Valor Y em milimetros" />
               <button id="linkAxisApplyBtn" type="button">Aplicar eixo</button>
             </div>
+            <div class="small">Enter aplica no campo ativo. Tab alterna entre X e Y.</div>
           </div>
           <div class="link-command-row">
             <button id="linkClearStartBtn" type="button">Limpar inicio</button>
           </div>
-          <div id="linkSelectionInfo" class="small">Selecione um vertice de poligono para iniciar.</div>
+          <div id="linkSelectionInfo" class="small">Selecione um ponto de linha/poligono para iniciar.</div>
         </div>
         <div id="dropHint">Solte um arquivo DXF aqui</div>
         <div id="statusbar">Pronto.</div>
