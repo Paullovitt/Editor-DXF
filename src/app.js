@@ -1181,25 +1181,58 @@ function clearMeasurements() {
   labelsLayer.style.display = 'none';
 }
 
-function collectMeasurementSegments() {
-  const segments = [];
-  const MAX_SEGMENTS = 160;
+function collectMeasurementItems() {
+  const items = [];
+  const MAX_ITEMS = 220;
   for (const id of selectedIds) {
     const e = entityById(id);
     if (!e) continue;
     if (e.type === 'LINE') {
-      segments.push([{ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }]);
+      items.push({
+        kind: 'segment',
+        start: { x: e.x1, y: e.y1 },
+        end: { x: e.x2, y: e.y2 },
+      });
+    } else if (e.type === 'CIRCLE') {
+      if (Math.abs(Number(e.r) || 0) > 1e-6) {
+        items.push({
+          kind: 'circle',
+          cx: Number(e.cx) || 0,
+          cy: Number(e.cy) || 0,
+          r: Math.abs(Number(e.r) || 0),
+        });
+      }
+    } else if (e.type === 'ARC') {
+      if (Math.abs(Number(e.r) || 0) > 1e-6) {
+        items.push({
+          kind: 'arc',
+          cx: Number(e.cx) || 0,
+          cy: Number(e.cy) || 0,
+          r: Math.abs(Number(e.r) || 0),
+          startAngle: Number(e.startAngle) || 0,
+          endAngle: Number(e.endAngle) || 0,
+        });
+      }
     } else if (e.points?.length && e.points.length >= 2) {
       for (let i = 1; i < e.points.length; i += 1) {
-        segments.push([e.points[i - 1], e.points[i]]);
+        items.push({
+          kind: 'segment',
+          start: e.points[i - 1],
+          end: e.points[i],
+        });
+        if (items.length >= MAX_ITEMS) break;
       }
-      if (e.closed && e.points.length > 2) {
-        segments.push([e.points[e.points.length - 1], e.points[0]]);
+      if (e.closed && e.points.length > 2 && items.length < MAX_ITEMS) {
+        items.push({
+          kind: 'segment',
+          start: e.points[e.points.length - 1],
+          end: e.points[0],
+        });
       }
     }
-    if (segments.length >= MAX_SEGMENTS) break;
+    if (items.length >= MAX_ITEMS) break;
   }
-  return segments.slice(0, MAX_SEGMENTS);
+  return items.slice(0, MAX_ITEMS);
 }
 
 function addMeasurementLabel(worldPos, text) {
@@ -1213,18 +1246,18 @@ function addMeasurementLabel(worldPos, text) {
 function rebuildMeasurements() {
   clearMeasurements();
   if (tool !== 'window' || !selectedIds.size) return;
-  const segments = collectMeasurementSegments();
-  if (!segments.length) return;
+  const items = collectMeasurementItems();
+  if (!items.length) return;
   const points = [];
   const pushSegment = (a, b) => {
     points.push(new THREE.Vector3(a.x, a.y, 2.2), new THREE.Vector3(b.x, b.y, 2.2));
   };
 
-  for (const [start, end] of segments) {
+  const drawLinearDimension = (start, end, labelText = null) => {
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const len = Math.hypot(dx, dy);
-    if (len < 1e-6) continue;
+    if (len < 1e-6) return;
 
     const ux = dx / len;
     const uy = dy / len;
@@ -1253,7 +1286,68 @@ function rebuildMeasurements() {
     pushSegment(b, bRight);
 
     const labelPos = { x: (a.x + b.x) / 2 + nx * (4 / camera.zoom), y: (a.y + b.y) / 2 + ny * (4 / camera.zoom) };
-    addMeasurementLabel(labelPos, mm(len));
+    addMeasurementLabel(labelPos, labelText || mm(len));
+  };
+
+  const drawRadiusLeader = (center, radius, angleRad, labelText) => {
+    if (radius < 1e-6) return;
+    const ux = Math.cos(angleRad);
+    const uy = Math.sin(angleRad);
+    const anchor = { x: center.x + ux * radius, y: center.y + uy * radius };
+    const ext = Math.max(10 / camera.zoom, radius * 0.18);
+    const leader = { x: anchor.x + ux * ext, y: anchor.y + uy * ext };
+
+    pushSegment(center, anchor);
+    pushSegment(anchor, leader);
+
+    const tick = Math.max(3 / camera.zoom, 0.7);
+    const nx = -uy;
+    const ny = ux;
+    const tickA = { x: anchor.x + nx * tick, y: anchor.y + ny * tick };
+    const tickB = { x: anchor.x - nx * tick, y: anchor.y - ny * tick };
+    pushSegment(tickA, tickB);
+
+    addMeasurementLabel({ x: leader.x + ux * (3 / camera.zoom), y: leader.y + uy * (3 / camera.zoom) }, labelText);
+  };
+
+  const drawArcLengthTag = (arcItem) => {
+    const startRad = THREE.MathUtils.degToRad(arcItem.startAngle);
+    const endRad = THREE.MathUtils.degToRad(arcItem.endAngle);
+    const sweep = normalizeRad(endRad - startRad);
+    if (sweep < 1e-6) return;
+
+    const mid = startRad + sweep / 2;
+    const ux = Math.cos(mid);
+    const uy = Math.sin(mid);
+    const anchor = { x: arcItem.cx + ux * arcItem.r, y: arcItem.cy + uy * arcItem.r };
+    const ext = Math.max(10 / camera.zoom, arcItem.r * 0.22);
+    const guide = { x: anchor.x + ux * ext, y: anchor.y + uy * ext };
+    pushSegment(anchor, guide);
+
+    const arcLen = arcItem.r * sweep;
+    addMeasurementLabel({ x: guide.x + ux * (3 / camera.zoom), y: guide.y + uy * (3 / camera.zoom) }, `A ${mm(arcLen)}`);
+  };
+
+  for (const item of items) {
+    if (item.kind === 'segment') {
+      drawLinearDimension(item.start, item.end);
+      continue;
+    }
+    if (item.kind === 'circle') {
+      const left = { x: item.cx - item.r, y: item.cy };
+      const right = { x: item.cx + item.r, y: item.cy };
+      drawLinearDimension(left, right, `D ${mm(item.r * 2)}`);
+      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, Math.PI / 4, `R ${mm(item.r)}`);
+      continue;
+    }
+    if (item.kind === 'arc') {
+      const startRad = THREE.MathUtils.degToRad(item.startAngle);
+      const endRad = THREE.MathUtils.degToRad(item.endAngle);
+      const sweep = normalizeRad(endRad - startRad);
+      const mid = startRad + sweep / 2;
+      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, mid, `R ${mm(item.r)}`);
+      drawArcLengthTag(item);
+    }
   }
 
   if (!points.length) return;
