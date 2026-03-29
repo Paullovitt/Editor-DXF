@@ -30,6 +30,15 @@ const option3SpanEl = $('option3Span');
 const option3SpanWrapEl = $('option3SpanWrap');
 const option3ApplyBtnEl = $('option3ApplyBtn');
 const option3TypeButtons = [...document.querySelectorAll('.option3-type-btn')];
+const linkCommandPanelEl = $('linkCommandPanel');
+const linkClearStartBtnEl = $('linkClearStartBtn');
+const linkSelectionInfoEl = $('linkSelectionInfo');
+const linkTypeButtons = [...document.querySelectorAll('.link-type-btn')];
+const linkAxisControlsEl = $('linkAxisControls');
+const linkAxisValueEl = $('linkAxisValue');
+const linkAxisXBtnEl = $('linkAxisXBtn');
+const linkAxisYBtnEl = $('linkAxisYBtn');
+const linkAxisApplyBtnEl = $('linkAxisApplyBtn');
 const cornerCommandPanelEl = $('cornerCommandPanel');
 const cornerSizeEl = $('cornerSize');
 const cornerApplyBtnEl = $('cornerApplyBtn');
@@ -110,8 +119,13 @@ let needsRender = true;
 let pendingZoom = null;
 let rectangleCommandOpen = false;
 let option3CommandOpen = false;
+let linkCommandOpen = false;
 let cornerCommandOpen = false;
 let option3Type = 'circle';
+let linkMode = 'orthXY';
+let linkAxis = 'x';
+let linkStartPick = null;
+let linkAxisAnchor = null;
 let cornerType = 'roundOuter';
 let rotationHudState = null;
 let rotationHudHideTimer = null;
@@ -125,9 +139,13 @@ const KEYBOARD_ROTATE_STEP_DEG = 1;
 const OPTION3_DEFAULT_RADIUS_MM = 10;
 const OPTION3_DEFAULT_SPAN_MM = 40;
 const OPTION3_TYPE_IDS = new Set(['circle', 'capsule90']);
+const LINK_MODE_IDS = new Set(['orthXY', 'free', 'axisFree']);
+const LINK_AXIS_IDS = new Set(['x', 'y']);
+const LINK_AXIS_DEFAULT_MM = 200;
 const CORNER_DEFAULT_MM = 10;
 const CORNER_MIN_PICK_COUNT = 2;
 const LINE_CONNECTION_TOLERANCE_MM = 0.05;
+const LINK_PICK_RADIUS_PX = 26;
 const ROTATION_HUD_TIMEOUT_MS = 1400;
 const ROTATION_HUD_RADIUS_PX = 38;
 const ROTATION_HUD_PIVOT_TOL_MM = 0.25;
@@ -227,6 +245,17 @@ actionSlotsController.registerHandler(3, () => {
   return opened
     ? { ok: true, detail: 'Opcao 3 ativa: escolha circulo ou capsula 90 e informe as medidas em mm.' }
     : { ok: false, detail: 'Nao foi possivel abrir a Opcao 3.' };
+});
+actionSlotsController.setSlotMeta(4, {
+  label: 'Ligacao por poligono',
+  icon: 'link-line',
+  allowedTools: ['select', 'vertex', 'window'],
+});
+actionSlotsController.registerHandler(4, () => {
+  const opened = openLinkCommand();
+  return opened
+    ? { ok: true, detail: 'Opcao 4 ativa: clique nos vertices dos poligonos para criar ligacoes.' }
+    : { ok: false, detail: 'Nao foi possivel abrir a Opcao 4.' };
 });
 function selectionPivot() {
   const entities = [...selectedIds].map((id) => entityById(id)).filter(Boolean);
@@ -408,6 +437,7 @@ function restoreFrom(serialized) {
   hideRotationHud();
   closeRectCommand({ silent: true });
   closeOption3Command({ silent: true });
+  closeLinkCommand({ silent: true });
   closeCornerCommand({ silent: true });
   rebuildScene();
   refreshUi();
@@ -574,6 +604,19 @@ function createLineLoopEntities(points, options = {}) {
 function createLineEntity(start, end, layer = '0', name = 'Segmento') {
   return {
     id: createRuntimeEntityId('corner'),
+    type: 'LINE',
+    layer,
+    x1: start.x,
+    y1: start.y,
+    x2: end.x,
+    y2: end.y,
+    name,
+  };
+}
+
+function createLinkLineEntity(start, end, layer = '0', name = 'Ligacao') {
+  return {
+    id: createRuntimeEntityId('link'),
     type: 'LINE',
     layer,
     x1: start.x,
@@ -1024,6 +1067,7 @@ function applyOption3Command() {
 function openOption3Command() {
   if (!option3CommandPanelEl || !option3RadiusEl || !option3SpanEl) return false;
   closeRectCommand({ silent: true });
+  closeLinkCommand({ silent: true });
   closeCornerCommand({ silent: true });
   option3CommandOpen = true;
   option3CommandPanelEl.hidden = false;
@@ -1035,6 +1079,288 @@ function openOption3Command() {
   option3RadiusEl.focus();
   option3RadiusEl.select();
   setStatus('Opcao 3: escolha o tipo, informe medidas em mm e clique em Criar.');
+  return true;
+}
+
+function isPolygonEntity(entity) {
+  return Boolean(entity && Array.isArray(entity.points) && entity.points.length >= 2);
+}
+
+function isLinkTargetEntity(entity) {
+  if (!entity) return false;
+  if (entity.type === 'LINE') return true;
+  return isPolygonEntity(entity);
+}
+
+function linkModeLabel(modeId) {
+  if (modeId === 'axisFree') return 'Linha livre X/Y';
+  if (modeId === 'free') return 'Reta solta';
+  return 'Reta X/Y';
+}
+
+function updateLinkTypeButtons() {
+  for (const button of linkTypeButtons) {
+    const isActive = button.dataset.linkMode === linkMode;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  }
+  if (linkAxisControlsEl) {
+    linkAxisControlsEl.hidden = linkMode !== 'axisFree';
+  }
+}
+
+function updateLinkAxisButtons() {
+  if (linkAxisXBtnEl) linkAxisXBtnEl.classList.toggle('is-active', linkAxis === 'x');
+  if (linkAxisYBtnEl) linkAxisYBtnEl.classList.toggle('is-active', linkAxis === 'y');
+}
+
+function setLinkAxis(axisId) {
+  if (!LINK_AXIS_IDS.has(axisId)) return;
+  linkAxis = axisId;
+  updateLinkAxisButtons();
+  updateLinkSelectionInfo();
+}
+
+function setLinkMode(modeId) {
+  if (!LINK_MODE_IDS.has(modeId)) return;
+  const changed = linkMode !== modeId;
+  linkMode = modeId;
+  if (changed) {
+    linkStartPick = null;
+    linkAxisAnchor = null;
+    setActiveHandle(null);
+  }
+  updateLinkTypeButtons();
+  updateLinkSelectionInfo();
+}
+
+function getVisiblePolygonEntities() {
+  return doc.entities.filter((entity) => {
+    if (!isLinkTargetEntity(entity)) return false;
+    const layer = getLayer(doc, entity.layer || '0');
+    return layer.visible && isEntityEditable(doc, entity);
+  });
+}
+
+function collectLinkPickPoints(entity) {
+  if (!entity) return [];
+  if (entity.type === 'LINE') {
+    return [
+      { vertexIndex: 0, point: { x: Number(entity.x1) || 0, y: Number(entity.y1) || 0 } },
+      { vertexIndex: 1, point: { x: Number(entity.x2) || 0, y: Number(entity.y2) || 0 } },
+    ];
+  }
+  if (entity.points?.length) {
+    return entity.points.map((p, index) => ({
+      vertexIndex: index,
+      point: { x: Number(p.x) || 0, y: Number(p.y) || 0 },
+    }));
+  }
+  return [];
+}
+
+function syncLinkPolygonSelection(options = {}) {
+  const { keepStart = false } = options;
+  const targets = getVisiblePolygonEntities();
+  selectedIds = new Set(targets.map((entity) => entity.id));
+  setHoveredHandle(null);
+  setActiveHandle(null);
+  if (!keepStart) {
+    linkStartPick = null;
+    linkAxisAnchor = null;
+  }
+  rebuildScene();
+  refreshUi();
+}
+
+function updateLinkSelectionInfo() {
+  if (!linkSelectionInfoEl) return;
+  const targetCount = getVisiblePolygonEntities().length;
+  if (linkMode === 'axisFree') {
+    const axisText = linkAxis === 'x' ? 'X' : 'Y';
+    const valueText = Number(linkAxisValueEl?.value || 0).toFixed(2);
+    const anchorText = linkAxisAnchor
+      ? `Origem: (${linkAxisAnchor.x.toFixed(2)}, ${linkAxisAnchor.y.toFixed(2)})`
+      : 'Origem: clique no canvas';
+    linkSelectionInfoEl.textContent = `Modo ${linkModeLabel(linkMode)}. Eixo ${axisText}. Valor ${valueText} mm. ${anchorText}.`;
+    return;
+  }
+
+  if (!targetCount) {
+    linkSelectionInfoEl.textContent = 'Nenhuma linha/poligono visivel para ligacao.';
+    return;
+  }
+
+  const startText = linkStartPick
+    ? `Inicio: ${linkStartPick.entityId}, vertice ${Number(linkStartPick.vertexIndex) + 1}.`
+    : 'Inicio: nao definido.';
+  linkSelectionInfoEl.textContent = `${targetCount} alvo(s) pronto(s). Modo ${linkModeLabel(linkMode)}. ${startText}`;
+}
+
+function resetLinkStart(options = {}) {
+  const { silent = false } = options;
+  linkStartPick = null;
+  linkAxisAnchor = null;
+  setActiveHandle(null);
+  updateLinkSelectionInfo();
+  if (!silent) setStatus('Opcao 4: origem limpa. Defina novamente.');
+}
+
+function findPolygonVertexPick(clientX, clientY) {
+  const world = worldFromClient(clientX, clientY);
+  const threshold = pickRadiusWorld(LINK_PICK_RADIUS_PX);
+  let best = null;
+  for (const entity of getVisiblePolygonEntities()) {
+    const candidates = collectLinkPickPoints(entity);
+    for (const candidate of candidates) {
+      const d = distance(world, candidate.point);
+      if (d > threshold) continue;
+      if (!best || d < best.d) {
+        best = {
+          entityId: entity.id,
+          vertexIndex: candidate.vertexIndex,
+          point: { x: candidate.point.x, y: candidate.point.y },
+          layer: entity.layer || '0',
+          d,
+        };
+      }
+    }
+  }
+  return best;
+}
+
+function buildLinkEntitiesFromPicks(startPick, endPick, modeId) {
+  if (!startPick || !endPick) return [];
+  const layer = startPick.layer || endPick.layer || '0';
+  const start = startPick.point;
+  const end = endPick.point;
+  if (modeId === 'free') {
+    if (distance(start, end) <= 1e-6) return [];
+    return [createLinkLineEntity(start, end, layer, 'Ligacao solta')];
+  }
+
+  const segments = [];
+  const middle = { x: end.x, y: start.y };
+  if (distance(start, middle) > 1e-6) {
+    segments.push(createLinkLineEntity(start, middle, layer, 'Ligacao X'));
+  }
+  if (distance(middle, end) > 1e-6) {
+    segments.push(createLinkLineEntity(middle, end, layer, 'Ligacao Y'));
+  }
+  return segments;
+}
+
+function applyLinkAxisLine() {
+  if (!linkAxisAnchor) {
+    setStatus('Opcao 4: clique no canvas para definir a origem da linha livre.');
+    return false;
+  }
+  const valueMm = Number(String(linkAxisValueEl?.value ?? '').replace(',', '.'));
+  if (!Number.isFinite(valueMm) || Math.abs(valueMm) <= 1e-9) {
+    setStatus('Opcao 4: informe um valor X/Y valido (positivo ou negativo, exceto zero).');
+    linkAxisValueEl?.focus();
+    linkAxisValueEl?.select();
+    return false;
+  }
+  const start = { x: linkAxisAnchor.x, y: linkAxisAnchor.y };
+  const end = {
+    x: start.x + (linkAxis === 'x' ? valueMm : 0),
+    y: start.y + (linkAxis === 'y' ? valueMm : 0),
+  };
+  const line = createLinkLineEntity(start, end, '0', `Linha livre ${linkAxis.toUpperCase()} ${valueMm.toFixed(2)}mm`);
+  pushUndo('opcao 4 - linha livre x/y');
+  doc.entities.push(line);
+  ensureLayers(doc);
+  selectedIds.add(line.id);
+  rebuildScene();
+  refreshUi();
+  requestRender();
+  setStatus(`Opcao 4: linha livre criada no eixo ${linkAxis.toUpperCase()} com ${valueMm.toFixed(2)} mm.`);
+  return true;
+}
+
+function applyLinkFromPick(endPick) {
+  if (!linkStartPick) return false;
+  const segments = buildLinkEntitiesFromPicks(linkStartPick, endPick, linkMode);
+  if (!segments.length) {
+    setStatus('Opcao 4: pontos coincidentes ou invalidos para ligacao.');
+    return false;
+  }
+
+  pushUndo(`opcao 4 - ${linkMode === 'free' ? 'reta solta' : 'reta x/y'}`);
+  doc.entities.push(...segments);
+  ensureLayers(doc);
+  syncLinkPolygonSelection({ keepStart: true });
+  linkStartPick = endPick;
+  setActiveHandle({ entityId: endPick.entityId, vertexIndex: endPick.vertexIndex });
+  updateLinkSelectionInfo();
+  requestRender();
+  setStatus(`Opcao 4: ${segments.length} ligacao(oes) criada(s) no modo ${linkModeLabel(linkMode)}.`);
+  return true;
+}
+
+function handleLinkCanvasPick(clientX, clientY) {
+  if (!linkCommandOpen) return false;
+  if (linkMode === 'axisFree') {
+    const anchor = snapWorld(worldFromClient(clientX, clientY));
+    linkAxisAnchor = { x: anchor.x, y: anchor.y };
+    setHoveredHandle(null);
+    setActiveHandle(null);
+    updateLinkSelectionInfo();
+    setStatus(`Opcao 4: origem definida em (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}). Escolha eixo e valor.`);
+    return true;
+  }
+  const pick = findPolygonVertexPick(clientX, clientY);
+  if (!pick) {
+    setStatus('Opcao 4: clique em um vertice de linha/poligono.');
+    return true;
+  }
+
+  if (!linkStartPick) {
+    linkStartPick = pick;
+    setActiveHandle({ entityId: pick.entityId, vertexIndex: pick.vertexIndex });
+    updateLinkSelectionInfo();
+    setStatus('Opcao 4: ponto inicial definido. Selecione o destino.');
+    return true;
+  }
+
+  if (pick.entityId === linkStartPick.entityId && pick.vertexIndex === linkStartPick.vertexIndex) {
+    setStatus('Opcao 4: selecione um vertice diferente para concluir a ligacao.');
+    return true;
+  }
+  applyLinkFromPick(pick);
+  return true;
+}
+
+function closeLinkCommand(options = {}) {
+  const { silent = false } = options;
+  linkCommandOpen = false;
+  linkStartPick = null;
+  linkAxisAnchor = null;
+  if (linkCommandPanelEl) linkCommandPanelEl.hidden = true;
+  actionSlotsController.setActiveSlot(null);
+  if (!silent) setStatus('Opcao 4 encerrada.');
+}
+
+function openLinkCommand() {
+  if (!linkCommandPanelEl) return false;
+  closeRectCommand({ silent: true });
+  closeOption3Command({ silent: true });
+  closeCornerCommand({ silent: true });
+  linkCommandOpen = true;
+  linkStartPick = null;
+  linkAxisAnchor = null;
+  linkCommandPanelEl.hidden = false;
+  actionSlotsController.setActiveSlot(4);
+  if (!Number.isFinite(Number(linkAxisValueEl?.value))) {
+    if (linkAxisValueEl) linkAxisValueEl.value = String(LINK_AXIS_DEFAULT_MM);
+  }
+  setLinkMode(linkMode);
+  setLinkAxis(linkAxis);
+  if (tool !== 'vertex') setTool('vertex');
+  syncLinkPolygonSelection({ keepStart: false });
+  updateLinkSelectionInfo();
+  setStatus('Opcao 4: escolha modo e clique para ligar (ou defina origem para linha livre X/Y).');
   return true;
 }
 
@@ -1117,6 +1443,7 @@ function openCornerCommand() {
   if (!cornerCommandPanelEl || !cornerSizeEl) return false;
   closeRectCommand({ silent: true });
   closeOption3Command({ silent: true });
+  closeLinkCommand({ silent: true });
   cornerCommandOpen = true;
   cornerCommandPanelEl.hidden = false;
   actionSlotsController.setActiveSlot(2);
@@ -1230,6 +1557,7 @@ function createRectangleFromInput() {
 function openRectCommand() {
   if (!rectCommandPanelEl || !rectSizeXEl || !rectSizeYEl) return false;
   closeOption3Command({ silent: true });
+  closeLinkCommand({ silent: true });
   closeCornerCommand({ silent: true });
   rectangleCommandOpen = true;
   rectCommandPanelEl.hidden = false;
@@ -2145,9 +2473,13 @@ function refreshUi() {
   refreshSelectionInfo();
   refreshProperties();
   updateCornerSelectionInfo();
+  updateLinkSelectionInfo();
 }
 
 function setTool(next) {
+  if (linkCommandOpen && next !== 'vertex') {
+    closeLinkCommand({ silent: true });
+  }
   if (option3CommandOpen && next === 'vertex') {
     closeOption3Command({ silent: true });
   }
@@ -2304,6 +2636,10 @@ function hoverHandleNear(clientX, clientY, options = {}) {
 function startDrag(clientX, clientY, additive = false) {
   const hit = intersectObjects(clientX, clientY, tool === 'vertex');
   const world = worldFromClient(clientX, clientY);
+  if (linkCommandOpen) {
+    handleLinkCanvasPick(clientX, clientY);
+    return;
+  }
   if (tool === 'window') {
     dragState = { type: 'window', startWorld: world, startClient: clientToLocal(clientX, clientY), additive };
     updateSelectionRect(dragState.startClient, dragState.startClient);
@@ -2530,6 +2866,7 @@ function importFromText(text, fileName = 'editado.dxf') {
   hideRotationHud();
   closeRectCommand({ silent: true });
   closeOption3Command({ silent: true });
+  closeLinkCommand({ silent: true });
   closeCornerCommand({ silent: true });
   undoStack = [];
   redoStack = [];
@@ -2665,6 +3002,41 @@ if (option3SpanEl) {
 if (option3ApplyBtnEl) {
   option3ApplyBtnEl.addEventListener('click', () => applyOption3Command());
 }
+if (linkCommandPanelEl) {
+  linkCommandPanelEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+}
+for (const button of linkTypeButtons) {
+  button.addEventListener('click', () => {
+    setLinkMode(button.dataset.linkMode || 'orthXY');
+    setStatus(`Opcao 4: modo selecionado - ${linkModeLabel(linkMode)}.`);
+  });
+}
+if (linkClearStartBtnEl) {
+  linkClearStartBtnEl.addEventListener('click', () => resetLinkStart());
+}
+if (linkAxisXBtnEl) {
+  linkAxisXBtnEl.addEventListener('click', () => {
+    setLinkAxis('x');
+    setStatus('Opcao 4: eixo X selecionado.');
+  });
+}
+if (linkAxisYBtnEl) {
+  linkAxisYBtnEl.addEventListener('click', () => {
+    setLinkAxis('y');
+    setStatus('Opcao 4: eixo Y selecionado.');
+  });
+}
+if (linkAxisValueEl) {
+  linkAxisValueEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      applyLinkAxisLine();
+    }
+  });
+}
+if (linkAxisApplyBtnEl) {
+  linkAxisApplyBtnEl.addEventListener('click', () => applyLinkAxisLine());
+}
 if (cornerCommandPanelEl) {
   cornerCommandPanelEl.addEventListener('pointerdown', (e) => e.stopPropagation());
 }
@@ -2710,6 +3082,22 @@ viewport.addEventListener('pointermove', (e) => {
     moveDrag(e.clientX, e.clientY);
     return;
   }
+  if (linkCommandOpen) {
+    if (linkMode === 'axisFree') {
+      setHoveredHandle(null);
+      viewport.style.cursor = 'crosshair';
+    } else {
+      const pick = findPolygonVertexPick(e.clientX, e.clientY);
+      if (pick) {
+        setHoveredHandle({ entityId: pick.entityId, vertexIndex: pick.vertexIndex });
+        viewport.style.cursor = 'pointer';
+      } else {
+        setHoveredHandle(null);
+        viewport.style.cursor = 'crosshair';
+      }
+    }
+    return;
+  }
   if (tool === 'vertex') {
     const hover = hoverHandleNear(e.clientX, e.clientY, { includeAllVisible: true });
     setHoveredHandle(hover);
@@ -2747,12 +3135,16 @@ window.addEventListener('keydown', (e) => {
   const isEscape = e.key === 'Escape';
   const hadRectCommandOpen = isEscape && rectangleCommandOpen;
   const hadOption3CommandOpen = isEscape && option3CommandOpen;
+  const hadLinkCommandOpen = isEscape && linkCommandOpen;
   const hadCornerCommandOpen = isEscape && cornerCommandOpen;
   if (hadRectCommandOpen) {
     closeRectCommand({ silent: true });
   }
   if (hadOption3CommandOpen) {
     closeOption3Command({ silent: true });
+  }
+  if (hadLinkCommandOpen) {
+    closeLinkCommand({ silent: true });
   }
   if (hadCornerCommandOpen) {
     closeCornerCommand({ silent: true });
@@ -2765,6 +3157,10 @@ window.addEventListener('keydown', (e) => {
   );
   if (typing && !isEscape) return;
   if (isEscape) {
+    if (hadLinkCommandOpen) {
+      setStatus('Opcao 4 encerrada.');
+      return;
+    }
     if (selectedIds.size) {
       selectedIds.clear();
       hideRotationHud();
@@ -2779,6 +3175,8 @@ window.addEventListener('keydown', (e) => {
       setStatus('Opcao 1 encerrada.');
     } else if (hadOption3CommandOpen) {
       setStatus('Opcao 3 encerrada.');
+    } else if (hadLinkCommandOpen) {
+      setStatus('Opcao 4 encerrada.');
     } else if (hadCornerCommandOpen) {
       setStatus('Opcao 2 encerrada.');
     }
@@ -2854,7 +3252,10 @@ refreshUi();
 renderActionSlots();
 renderActionCard();
 updateOption3TypeButtons();
+updateLinkTypeButtons();
+updateLinkAxisButtons();
 updateCornerTypeButtons();
 updateCornerSelectionInfo();
+updateLinkSelectionInfo();
 animate();
 })();

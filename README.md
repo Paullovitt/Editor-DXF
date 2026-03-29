@@ -120,6 +120,7 @@ Solucao:
 - A `Opcao 2` usa campo de `Raio/Prof. (mm)` com valor inicial de `10 mm` e gera ligacoes por par de linhas selecionadas (vertices) conforme o tipo escolhido.
 - A `Opcao 2` aplica transformacao real no canto: faz `trim` das duas linhas do par no vertice e insere apenas a ligacao correspondente ao tipo escolhido (sem manter a quina original inteira).
 - Slot `Opcao 3` agora exibe icone proprio e abre painel com 2 subopcoes: `Circulo` (raio em mm) e `Capsula 90` (raio + distancia ponta a ponta em mm), criando a geometria no centro da vista/selecao.
+- Slot `Opcao 4` agora abre painel de ligacao com 3 subopcoes: `Reta X/Y` (segmentos ortogonais), `Reta solta` (segmento livre entre vertices) e `Linha livre X/Y` (clique em qualquer ponto para origem + valor assinado no eixo X ou Y).
 - Padrao adotado para as proximas geometrias das `Opcoes`: gerar contorno em entidades segmentadas (`LINE`) para manter vertices editaveis e evitar geometria em linha unica.
 
 ## Licenca 

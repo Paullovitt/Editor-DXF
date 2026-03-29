@@ -186,6 +186,46 @@
         shapeSvg.appendChild(circle);
         shapeSvg.appendChild(capsule);
         button.appendChild(shapeSvg);
+      } else if (slot.icon === 'link-line') {
+        const linkSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        linkSvg.setAttribute('viewBox', '0 0 24 24');
+        linkSvg.setAttribute('class', 'option-slot-icon option-slot-icon--svg');
+        linkSvg.setAttribute('width', '28');
+        linkSvg.setAttribute('height', '28');
+        linkSvg.setAttribute('aria-hidden', 'true');
+
+        const ortho = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        ortho.setAttribute('d', 'M4 17h8V7h8');
+        ortho.setAttribute('fill', 'none');
+        ortho.setAttribute('stroke', '#22d3ee');
+        ortho.setAttribute('stroke-width', '1.8');
+        ortho.setAttribute('stroke-linecap', 'round');
+        ortho.setAttribute('stroke-linejoin', 'round');
+
+        const free = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        free.setAttribute('d', 'M5 6 19 18');
+        free.setAttribute('fill', 'none');
+        free.setAttribute('stroke', '#f59e0b');
+        free.setAttribute('stroke-width', '1.8');
+        free.setAttribute('stroke-linecap', 'round');
+
+        const p1 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        p1.setAttribute('cx', '4');
+        p1.setAttribute('cy', '17');
+        p1.setAttribute('r', '1.3');
+        p1.setAttribute('fill', '#e2e8f0');
+
+        const p2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        p2.setAttribute('cx', '20');
+        p2.setAttribute('cy', '7');
+        p2.setAttribute('r', '1.3');
+        p2.setAttribute('fill', '#e2e8f0');
+
+        linkSvg.appendChild(ortho);
+        linkSvg.appendChild(free);
+        linkSvg.appendChild(p1);
+        linkSvg.appendChild(p2);
+        button.appendChild(linkSvg);
       } else {
         const iconEl = document.createElement('span');
         iconEl.className = 'option-slot-icon option-slot-icon--text';

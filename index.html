@@ -163,6 +163,52 @@
           </div>
           <div id="cornerSelectionInfo" class="small">0 linha(s)/vertice(s) selecionada(s). Selecione pelo menos 2.</div>
         </div>
+        <div id="linkCommandPanel" class="link-command-panel" hidden>
+          <div class="link-command-head">
+            <strong>Ligacao (Opcao 4)</strong>
+            <span class="small">Linhas/poligonos + linha livre.</span>
+          </div>
+          <div class="link-type-grid" role="group" aria-label="Tipos de ligacao">
+            <button type="button" class="link-type-btn is-active" data-link-mode="orthXY" aria-label="Ligacao em X e Y">
+              <svg viewBox="0 0 24 24" class="link-type-icon" aria-hidden="true">
+                <path d="M4 17h8V7h8" fill="none" stroke="#22d3ee" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+                <circle cx="4" cy="17" r="1.4" fill="#e2e8f0" />
+                <circle cx="20" cy="7" r="1.4" fill="#e2e8f0" />
+              </svg>
+              <span>Reta X/Y</span>
+            </button>
+            <button type="button" class="link-type-btn" data-link-mode="free" aria-label="Ligacao reta solta">
+              <svg viewBox="0 0 24 24" class="link-type-icon" aria-hidden="true">
+                <path d="M4 18 20 6" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" />
+                <circle cx="4" cy="18" r="1.4" fill="#e2e8f0" />
+                <circle cx="20" cy="6" r="1.4" fill="#e2e8f0" />
+              </svg>
+              <span>Reta solta</span>
+            </button>
+            <button type="button" class="link-type-btn" data-link-mode="axisFree" aria-label="Linha livre por eixo">
+              <svg viewBox="0 0 24 24" class="link-type-icon" aria-hidden="true">
+                <path d="M4 12h16M12 4v16" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" />
+                <circle cx="12" cy="12" r="1.5" fill="#e2e8f0" />
+              </svg>
+              <span>Linha livre X/Y</span>
+            </button>
+          </div>
+          <div id="linkAxisControls" class="link-axis-controls" hidden>
+            <div class="link-axis-row">
+              <label for="linkAxisValue">Valor eixo (mm)</label>
+              <input id="linkAxisValue" type="number" step="0.01" value="200" autocomplete="off" />
+            </div>
+            <div class="link-axis-row link-axis-row--buttons">
+              <button id="linkAxisXBtn" type="button" class="link-axis-btn is-active">X</button>
+              <button id="linkAxisYBtn" type="button" class="link-axis-btn">Y</button>
+              <button id="linkAxisApplyBtn" type="button">Aplicar eixo</button>
+            </div>
+          </div>
+          <div class="link-command-row">
+            <button id="linkClearStartBtn" type="button">Limpar inicio</button>
+          </div>
+          <div id="linkSelectionInfo" class="small">Selecione um vertice de poligono para iniciar.</div>
+        </div>
         <div id="dropHint">Solte um arquivo DXF aqui</div>
         <div id="statusbar">Pronto.</div>
       </section>
