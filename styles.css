@@ -104,6 +104,99 @@ button:hover, .button:hover { border-color: var(--accent); }
 #rectCreateBtn {
   padding: 6px 10px;
 }
+.corner-command-panel {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  z-index: 9;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 10px;
+  min-width: 560px;
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
+}
+.corner-command-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  gap: 12px;
+}
+.corner-command-head strong {
+  font-size: 13px;
+  color: #e2e8f0;
+}
+.corner-type-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.corner-type-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 74px;
+  padding: 8px 6px;
+  text-align: center;
+  background: #0b1325;
+  border: 1px solid #334155;
+  border-radius: 9px;
+}
+.corner-type-btn span {
+  font-size: 11px;
+  line-height: 1.2;
+  color: #cbd5e1;
+}
+.corner-type-btn:hover {
+  border-color: #60a5fa;
+  background: #13203a;
+}
+.corner-type-btn.is-active {
+  border-color: #22d3ee;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.3) inset;
+  background: #122740;
+}
+.corner-type-btn.is-active span {
+  color: #ecfeff;
+}
+.corner-type-icon {
+  width: 30px;
+  height: 30px;
+  display: block;
+  filter: drop-shadow(0 0 2px rgba(2, 6, 23, 0.45));
+}
+.corner-command-row {
+  display: grid;
+  grid-template-columns: auto 110px auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.corner-command-row label {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+.corner-command-row input {
+  width: 100%;
+  background: #0b1325;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.corner-command-row input:focus {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+#cornerApplyBtn,
+#cornerClearBtn {
+  padding: 6px 10px;
+}
 #dropHint {
   position: absolute; top: 18px; right: 18px; display: none; background: rgba(15, 23, 42, 0.9); border: 1px solid #334155;
   padding: 10px 12px; border-radius: 8px; color: var(--muted); font-size: 13px;
@@ -212,6 +305,20 @@ button:hover, .button:hover { border-color: var(--accent); }
 }
 .action-log-item strong {
   color: #e2e8f0;
+}
+@media (max-width: 820px) {
+  .corner-command-panel {
+    min-width: min(96vw, 560px);
+  }
+  .corner-type-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .corner-command-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .corner-command-row label {
+    grid-column: 1 / -1;
+  }
 }
 @media (max-width: 1200px) {
   .layout { grid-template-columns: 220px 1fr 300px; }

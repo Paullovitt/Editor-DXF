@@ -103,6 +103,7 @@ Solucao:
 - Rotacionar/Escalar/Espelhar agora aplicam no centro do conjunto selecionado.
 - Atalhos de rotacao: `E` = 90 graus, `R` = 45 graus.
 - Botoes `Undo/Redo` removidos da barra (mantidos atalhos `Ctrl+Z` e `Ctrl+Y`).
+- Setas do teclado (`<-`, `->`, `^`, `v`) deslocam a selecao atual em passos de `1 mm`; no modo `Vertices`, com bolinha ativa (vermelha), o passo de `1 mm` e aplicado no vertice ativo.
 - Exportacao usa o mesmo nome do arquivo original (sem sufixo `_editado`).
 - Novo painel `Opcoes` com 32 slots vazios (4 colunas x 8 linhas), pronto para receber logica de edicao por slot.
 - Novo card `Execucoes` abaixo de `Propriedades`, exibindo historico das ultimas execucoes dos slots.
@@ -110,6 +111,9 @@ Solucao:
 - Slot `Opcao 1` agora exibe icone de cubo e aciona criacao de retangulo por medidas: `X (mm)` -> `Enter` -> `Y (mm)` -> `Enter` para criar.
 - Durante a digitacao de `X/Y`, um preview do retangulo aparece no viewport para confirmar o tamanho antes de criar.
 - O retangulo da `Opcao 1` e gerado como 4 entidades `LINE` (base, direita, topo e esquerda), evitando virar uma unica polilinha e preservando cantos/vertices explicitos.
+- Slot `Opcao 2` agora exibe icone de canto e abre painel de cantos com 6 subopcoes (arredondado, quadrado para dentro, linha 45, circulo inverso para dentro, circulo para dentro e circulo para fora), exigindo no minimo 2 linhas selecionadas (vertices) e processando em pares na ordem da selecao.
+- A `Opcao 2` usa campo de `Raio/Prof. (mm)` com valor inicial de `10 mm` e gera ligacoes por par de linhas selecionadas (vertices) conforme o tipo escolhido.
+- A `Opcao 2` aplica transformacao real no canto: faz `trim` das duas linhas do par no vertice e insere apenas a ligacao correspondente ao tipo escolhido (sem manter a quina original inteira).
 - Padrao adotado para as proximas geometrias das `Opcoes`: gerar contorno em entidades segmentadas (`LINE`) para manter vertices editaveis e evitar geometria em linha unica.
 
 ## Licenca 

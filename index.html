@@ -51,7 +51,7 @@
             <p>Selecionar = mover pecas.</p>
             <p>Vertices = editar pontos, centros e raios.</p>
             <p>Janela = arraste uma area para selecionar.</p>
-            <p>Atalhos: Delete, E (90), R (45), Ctrl+Z, Ctrl+Y.</p>
+            <p>Atalhos: Delete, E (90), R (45), Setas (1 mm), Ctrl+Z, Ctrl+Y.</p>
           </div>
         </section>
         <section>
@@ -74,6 +74,63 @@
             <button id="rectCreateBtn" type="button">Criar</button>
           </div>
           <div class="small">Enter em X vai para Y. Enter em Y cria o retangulo.</div>
+        </div>
+        <div id="cornerCommandPanel" class="corner-command-panel" hidden>
+          <div class="corner-command-head">
+            <strong>Cantos (Opcao 2)</strong>
+            <span class="small">Selecione no minimo 2 linhas (vertices).</span>
+          </div>
+          <div class="corner-type-grid" role="group" aria-label="Tipos de canto">
+            <button type="button" class="corner-type-btn is-active" data-corner-type="roundOuter" aria-label="Arredondado">
+              <svg viewBox="0 0 24 24" class="corner-type-icon" aria-hidden="true">
+                <path d="M5 19V5h14" fill="none" stroke="#cbd5e1" stroke-width="1.7" stroke-linecap="round" />
+                <path d="M5 19Q5 5 19 5" fill="none" stroke="#22d3ee" stroke-width="2.2" stroke-linecap="round" />
+              </svg>
+              <span>Arredondado</span>
+            </button>
+            <button type="button" class="corner-type-btn" data-corner-type="squareInner" aria-label="Quadrado para dentro">
+              <svg viewBox="0 0 24 24" class="corner-type-icon" aria-hidden="true">
+                <path d="M5 19V5h14" fill="none" stroke="#cbd5e1" stroke-width="1.7" stroke-linecap="round" />
+                <path d="M5 19V12H12V5" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span>Quadrado para dentro</span>
+            </button>
+            <button type="button" class="corner-type-btn" data-corner-type="chamfer45" aria-label="Linha reta em 45">
+              <svg viewBox="0 0 24 24" class="corner-type-icon" aria-hidden="true">
+                <path d="M5 19V5h14" fill="none" stroke="#cbd5e1" stroke-width="1.7" stroke-linecap="round" />
+                <path d="M5 19L19 5" fill="none" stroke="#60a5fa" stroke-width="2.2" stroke-linecap="round" />
+              </svg>
+              <span>Linha 45</span>
+            </button>
+            <button type="button" class="corner-type-btn" data-corner-type="roundInner" aria-label="Circulo inverso para dentro">
+              <svg viewBox="0 0 24 24" class="corner-type-icon" aria-hidden="true">
+                <path d="M5 19V5h14" fill="none" stroke="#cbd5e1" stroke-width="1.7" stroke-linecap="round" />
+                <path d="M5 19Q19 19 19 5" fill="none" stroke="#a78bfa" stroke-width="2.2" stroke-linecap="round" />
+              </svg>
+              <span>Circulo inverso</span>
+            </button>
+            <button type="button" class="corner-type-btn" data-corner-type="circleInner" aria-label="Circulo completo para dentro">
+              <svg viewBox="0 0 24 24" class="corner-type-icon" aria-hidden="true">
+                <path d="M5 19V5h14" fill="none" stroke="#cbd5e1" stroke-width="1.7" stroke-linecap="round" />
+                <path d="M19 5A9 9 0 1 0 5 19" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round" />
+              </svg>
+              <span>Circulo p/ dentro</span>
+            </button>
+            <button type="button" class="corner-type-btn" data-corner-type="circleOuter" aria-label="Circulo completo para fora">
+              <svg viewBox="0 0 24 24" class="corner-type-icon" aria-hidden="true">
+                <path d="M5 19V5h14" fill="none" stroke="#cbd5e1" stroke-width="1.7" stroke-linecap="round" />
+                <path d="M5 19A9 9 0 1 1 19 5" fill="none" stroke="#f472b6" stroke-width="2.2" stroke-linecap="round" />
+              </svg>
+              <span>Circulo p/ fora</span>
+            </button>
+          </div>
+          <div class="corner-command-row">
+            <label for="cornerSize">Raio/Prof. (mm)</label>
+            <input id="cornerSize" type="number" min="0.001" step="0.01" value="10" autocomplete="off" />
+            <button id="cornerApplyBtn" type="button">Aplicar</button>
+            <button id="cornerClearBtn" type="button">Limpar vertices</button>
+          </div>
+          <div id="cornerSelectionInfo" class="small">0 linha(s)/vertice(s) selecionada(s). Selecione pelo menos 2.</div>
         </div>
         <div id="dropHint">Solte um arquivo DXF aqui</div>
         <div id="statusbar">Pronto.</div>

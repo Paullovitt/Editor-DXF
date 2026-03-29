@@ -24,6 +24,12 @@ const rectCommandPanelEl = $('rectCommandPanel');
 const rectSizeXEl = $('rectSizeX');
 const rectSizeYEl = $('rectSizeY');
 const rectCreateBtnEl = $('rectCreateBtn');
+const cornerCommandPanelEl = $('cornerCommandPanel');
+const cornerSizeEl = $('cornerSize');
+const cornerApplyBtnEl = $('cornerApplyBtn');
+const cornerClearBtnEl = $('cornerClearBtn');
+const cornerSelectionInfoEl = $('cornerSelectionInfo');
+const cornerTypeButtons = [...document.querySelectorAll('.corner-type-btn')];
 const dropHint = $('dropHint');
 const statusbar = $('statusbar');
 const layersEl = $('layers');
@@ -79,11 +85,24 @@ let redoStack = [];
 let needsRender = true;
 let pendingZoom = null;
 let rectangleCommandOpen = false;
+let cornerCommandOpen = false;
+let cornerType = 'roundOuter';
 const ENTITY_PICK_RADIUS_PX = 2;
 const VERTEX_PICK_RADIUS_PX = 14;
 const VERTEX_DRAG_DEADZONE_PX = 3;
 const VERTEX_DRAG_CLICK_GUARD_PX = 8;
 const VERTEX_DRAG_CLICK_GUARD_MS = 180;
+const KEYBOARD_NUDGE_MM = 1;
+const CORNER_DEFAULT_MM = 10;
+const CORNER_MIN_PICK_COUNT = 2;
+const CORNER_TYPE_IDS = new Set([
+  'roundOuter',
+  'squareInner',
+  'chamfer45',
+  'roundInner',
+  'circleInner',
+  'circleOuter',
+]);
 // Handles amarelos ampliados para melhorar visibilidade no modo Vertices.
 const YELLOW_HANDLE_SCALE = 0.6;
 const HANDLE_BASE_RADIUS = 1.25;
@@ -150,6 +169,17 @@ actionSlotsController.registerHandler(1, () => {
     ? { ok: true, detail: 'Opcao 1 ativa: informe X e Y (mm) para criar retangulo.' }
     : { ok: false, detail: 'Nao foi possivel abrir a Opcao 1.' };
 });
+actionSlotsController.setSlotMeta(2, {
+  label: 'Criar cantos',
+  icon: 'corner',
+  allowedTools: ['select', 'vertex', 'window'],
+});
+actionSlotsController.registerHandler(2, () => {
+  const opened = openCornerCommand();
+  return opened
+    ? { ok: true, detail: 'Opcao 2 ativa: selecione linhas (vertices) em pares e aplique o tipo de canto.' }
+    : { ok: false, detail: 'Nao foi possivel abrir a Opcao 2.' };
+});
 function selectionPivot() {
   const entities = [...selectedIds].map((id) => entityById(id)).filter(Boolean);
   if (!entities.length) return { x: 0, y: 0 };
@@ -181,6 +211,51 @@ function rotateSelected(angleDeg) {
   if (!changed) setStatus('Selecione uma peca para rotacionar.');
 }
 
+// Converte seta do teclado em deslocamento fixo (1 mm por toque).
+function arrowDeltaFromKey(key) {
+  if (key === 'ArrowLeft') return { dx: -KEYBOARD_NUDGE_MM, dy: 0 };
+  if (key === 'ArrowRight') return { dx: KEYBOARD_NUDGE_MM, dy: 0 };
+  if (key === 'ArrowUp') return { dx: 0, dy: KEYBOARD_NUDGE_MM };
+  if (key === 'ArrowDown') return { dx: 0, dy: -KEYBOARD_NUDGE_MM };
+  return null;
+}
+
+// No modo Vertices, prioriza o ponto ativo para ajuste fino por teclado.
+function nudgeActiveVertex(dx, dy) {
+  if (tool !== 'vertex' || !activeHandle) return false;
+  const entity = entityById(activeHandle.entityId);
+  if (!entity) return false;
+  const current = getVertexPosition(entity, activeHandle.vertexIndex);
+  if (!current) return false;
+
+  pushUndo('mover vertice (1 mm)');
+  updateVertex(entity, activeHandle.vertexIndex, {
+    x: current.x + dx,
+    y: current.y + dy,
+  });
+  updateEntityObject(entity.id);
+  buildHandles();
+  rebuildMeasurements();
+  updateLabelPositions();
+  refreshSelectionInfo();
+  updateRectangleDraftPreview();
+  requestRender();
+  return true;
+}
+
+// Sem ponto ativo, desloca a selecao de entidades no mesmo passo.
+function nudgeSelectedEntities(dx, dy) {
+  const entities = [...selectedIds].map((id) => entityById(id)).filter(Boolean);
+  if (!entities.length) return false;
+
+  pushUndo('mover selecao (1 mm)');
+  for (const entity of entities) translateEntity(entity, dx, dy);
+  rebuildScene();
+  refreshUi();
+  updateRectangleDraftPreview();
+  return true;
+}
+
 function pushUndo(label = 'alteracao') {
   undoStack.push(JSON.stringify(doc));
   if (undoStack.length > 80) undoStack.shift();
@@ -195,6 +270,7 @@ function restoreFrom(serialized) {
   hoveredHandle = null;
   activeHandle = null;
   closeRectCommand({ silent: true });
+  closeCornerCommand({ silent: true });
   rebuildScene();
   refreshUi();
 }
@@ -357,6 +433,410 @@ function createLineLoopEntities(points, options = {}) {
   return edges;
 }
 
+function createLineEntity(start, end, layer = '0', name = 'Segmento') {
+  return {
+    id: createRuntimeEntityId('corner'),
+    type: 'LINE',
+    layer,
+    x1: start.x,
+    y1: start.y,
+    x2: end.x,
+    y2: end.y,
+    name,
+  };
+}
+
+function normalizeVector(vec) {
+  const len = Math.hypot(vec.x, vec.y);
+  if (len < 1e-9) return null;
+  return { x: vec.x / len, y: vec.y / len };
+}
+
+function normalizeRad(rad) {
+  const turn = Math.PI * 2;
+  let normalized = rad % turn;
+  if (normalized < 0) normalized += turn;
+  return normalized;
+}
+
+function normalizeDeg(deg) {
+  let normalized = deg % 360;
+  if (normalized < 0) normalized += 360;
+  return normalized;
+}
+
+function cornerTypeLabel(typeId) {
+  if (typeId === 'squareInner') return 'Quadrado para dentro';
+  if (typeId === 'chamfer45') return 'Linha 45';
+  if (typeId === 'roundInner') return 'Circulo inverso';
+  if (typeId === 'circleInner') return 'Circulo para dentro';
+  if (typeId === 'circleOuter') return 'Circulo para fora';
+  return 'Arredondado';
+}
+
+function cornerBaseName(typeId) {
+  if (typeId === 'squareInner') return 'Canto quadrado interno';
+  if (typeId === 'chamfer45') return 'Canto chanfro 45';
+  if (typeId === 'roundInner') return 'Canto circulo inverso';
+  if (typeId === 'circleInner') return 'Canto circulo para dentro';
+  if (typeId === 'circleOuter') return 'Canto circulo para fora';
+  return 'Canto arredondado';
+}
+
+function createCornerArcEntity(options = {}) {
+  const {
+    startPoint,
+    endPoint,
+    bulgeNormal,
+    sagitta,
+    useMajorArc = false,
+    layer = '0',
+    name = 'Arco',
+  } = options;
+  if (!startPoint || !endPoint) return null;
+  const chord = distance(startPoint, endPoint);
+  if (chord < 1e-6) return null;
+
+  const safeSagitta = Math.max(0.001, Math.abs(sagitta || CORNER_DEFAULT_MM));
+  const radius = (chord * chord) / (8 * safeSagitta) + safeSagitta / 2;
+  const normal = normalizeVector(bulgeNormal || { x: 0, y: 1 }) || { x: 0, y: 1 };
+  const mid = { x: (startPoint.x + endPoint.x) / 2, y: (startPoint.y + endPoint.y) / 2 };
+  const centerDistance = Math.max(0, radius - safeSagitta);
+  const center = {
+    x: mid.x + normal.x * centerDistance,
+    y: mid.y + normal.y * centerDistance,
+  };
+
+  const angleA = Math.atan2(startPoint.y - center.y, startPoint.x - center.x);
+  const angleB = Math.atan2(endPoint.y - center.y, endPoint.x - center.x);
+  let startAngle = angleA;
+  let endAngle = angleB;
+  let delta = normalizeRad(endAngle - startAngle);
+  // Fillet usa arco menor; modos de circulo usam arco maior (efeito "bolha").
+  const shouldSwap = useMajorArc ? delta < Math.PI : delta > Math.PI;
+  if (shouldSwap) {
+    startAngle = angleB;
+    endAngle = angleA;
+    delta = normalizeRad(endAngle - startAngle);
+  }
+
+  return {
+    id: createRuntimeEntityId('corner'),
+    type: 'ARC',
+    layer,
+    cx: center.x,
+    cy: center.y,
+    r: radius,
+    startAngle: normalizeDeg(THREE.MathUtils.radToDeg(startAngle)),
+    endAngle: normalizeDeg(THREE.MathUtils.radToDeg(endAngle)),
+    name,
+  };
+}
+
+function updateCornerTypeButtons() {
+  for (const button of cornerTypeButtons) {
+    const isActive = button.dataset.cornerType === cornerType;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  }
+}
+
+function setCornerType(typeId) {
+  if (!CORNER_TYPE_IDS.has(typeId)) return;
+  cornerType = typeId;
+  updateCornerTypeButtons();
+}
+
+function clampValue(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getCornerSelectedLines() {
+  const lines = [];
+  for (const id of selectedIds) {
+    const entity = entityById(id);
+    if (!entity || entity.type !== 'LINE') continue;
+    const layer = getLayer(doc, entity.layer || '0');
+    if (!layer.visible) continue;
+    lines.push(entity);
+  }
+  return lines;
+}
+
+function intersectInfiniteLines(a1, a2, b1, b2) {
+  const denominator = (a1.x - a2.x) * (b1.y - b2.y) - (a1.y - a2.y) * (b1.x - b2.x);
+  if (Math.abs(denominator) < 1e-9) return null;
+  const detA = a1.x * a2.y - a1.y * a2.x;
+  const detB = b1.x * b2.y - b1.y * b2.x;
+  const x = (detA * (b1.x - b2.x) - (a1.x - a2.x) * detB) / denominator;
+  const y = (detA * (b1.y - b2.y) - (a1.y - a2.y) * detB) / denominator;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+function nearestLineEndpoints(lineA, lineB) {
+  const endpointsA = [{ x: lineA.x1, y: lineA.y1 }, { x: lineA.x2, y: lineA.y2 }];
+  const endpointsB = [{ x: lineB.x1, y: lineB.y1 }, { x: lineB.x2, y: lineB.y2 }];
+  let best = null;
+  for (let i = 0; i < endpointsA.length; i += 1) {
+    for (let j = 0; j < endpointsB.length; j += 1) {
+      const d = distance(endpointsA[i], endpointsB[j]);
+      if (!best || d < best.d) {
+        best = { aPoint: endpointsA[i], bPoint: endpointsB[j], aIndex: i, bIndex: j, d };
+      }
+    }
+  }
+  return best;
+}
+
+function lineDirectionFromCorner(line, corner) {
+  const endpoints = [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }];
+  const d1 = distance(corner, endpoints[0]);
+  const d2 = distance(corner, endpoints[1]);
+  const target = d1 >= d2 ? endpoints[0] : endpoints[1];
+  const dir = normalizeVector({ x: target.x - corner.x, y: target.y - corner.y });
+  if (dir) return dir;
+  return normalizeVector({ x: line.x2 - line.x1, y: line.y2 - line.y1 });
+}
+
+function getLineEndpoints(line) {
+  return [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }];
+}
+
+function setLineEndpoint(line, endpointIndex, point) {
+  if (endpointIndex === 0) {
+    line.x1 = point.x;
+    line.y1 = point.y;
+    return;
+  }
+  line.x2 = point.x;
+  line.y2 = point.y;
+}
+
+function buildCornerPairContext(lineA, lineB, options = {}) {
+  const sizeMm = Math.max(0.001, options.sizeMm || CORNER_DEFAULT_MM);
+  const endpointsA = getLineEndpoints(lineA);
+  const endpointsB = getLineEndpoints(lineB);
+  const nearest = nearestLineEndpoints(lineA, lineB);
+  if (!nearest) return null;
+
+  const intersection = intersectInfiniteLines(endpointsA[0], endpointsA[1], endpointsB[0], endpointsB[1]);
+  const cornerIndexA = intersection
+    ? (distance(endpointsA[0], intersection) <= distance(endpointsA[1], intersection) ? 0 : 1)
+    : nearest.aIndex;
+  const cornerIndexB = intersection
+    ? (distance(endpointsB[0], intersection) <= distance(endpointsB[1], intersection) ? 0 : 1)
+    : nearest.bIndex;
+
+  const cornerA = endpointsA[cornerIndexA];
+  const cornerB = endpointsB[cornerIndexB];
+  const corner = intersection || { x: (cornerA.x + cornerB.x) / 2, y: (cornerA.y + cornerB.y) / 2 };
+
+  const farA = endpointsA[1 - cornerIndexA];
+  const farB = endpointsB[1 - cornerIndexB];
+  const dirA = lineDirectionFromCorner(lineA, corner);
+  const dirB = lineDirectionFromCorner(lineB, corner);
+  if (!dirA || !dirB) return null;
+
+  const lenA = distance(corner, farA);
+  const lenB = distance(corner, farB);
+  if (lenA <= 1e-6 || lenB <= 1e-6) return null;
+
+  const dot = clampValue(dirA.x * dirB.x + dirA.y * dirB.y, -0.999999, 0.999999);
+  const angle = Math.acos(dot);
+  if (angle <= 1e-3 || Math.abs(Math.PI - angle) <= 1e-3) return null;
+
+  const tanHalf = Math.tan(angle / 2);
+  if (Math.abs(tanHalf) <= 1e-6) return null;
+
+  const maxOffset = Math.max(0.001, Math.min(lenA, lenB) - 0.01);
+  if (maxOffset <= 0) return null;
+
+  const isRoundType = options.typeId === 'roundOuter'
+    || options.typeId === 'roundInner'
+    || options.typeId === 'circleInner'
+    || options.typeId === 'circleOuter';
+  const offsetRaw = isRoundType ? sizeMm / tanHalf : sizeMm;
+  const offset = clampValue(offsetRaw, 0.001, maxOffset);
+
+  const trimPointA = { x: corner.x + dirA.x * offset, y: corner.y + dirA.y * offset };
+  const trimPointB = { x: corner.x + dirB.x * offset, y: corner.y + dirB.y * offset };
+  const bisector = normalizeVector({ x: dirA.x + dirB.x, y: dirA.y + dirB.y });
+  if (!bisector) return null;
+
+  return {
+    lineA,
+    lineB,
+    cornerIndexA,
+    cornerIndexB,
+    corner,
+    dirA,
+    dirB,
+    angle,
+    offset,
+    trimPointA,
+    trimPointB,
+    bisector,
+    layer: lineA.layer || lineB.layer || '0',
+  };
+}
+
+function buildCornerBridgeEntities(context, options = {}) {
+  const { typeId = 'roundOuter', pairIndex = 0 } = options;
+  const pairLabel = `Par ${pairIndex + 1}`;
+  const baseName = cornerBaseName(typeId);
+
+  if (typeId === 'chamfer45') {
+    return [createLineEntity(context.trimPointA, context.trimPointB, context.layer, `${baseName} - ${pairLabel}`)];
+  }
+
+  if (typeId === 'squareInner') {
+    const notch = {
+      x: context.corner.x + (context.dirA.x + context.dirB.x) * context.offset,
+      y: context.corner.y + (context.dirA.y + context.dirB.y) * context.offset,
+    };
+    return [
+      createLineEntity(context.trimPointA, notch, context.layer, `${baseName} - ${pairLabel} A`),
+      createLineEntity(notch, context.trimPointB, context.layer, `${baseName} - ${pairLabel} B`),
+    ];
+  }
+
+  const chord = distance(context.trimPointA, context.trimPointB);
+  let radius = context.offset * Math.tan(context.angle / 2);
+  radius = Math.max(radius, chord / 2 + 0.001);
+  const sagitta = radius - Math.sqrt(Math.max(0, radius * radius - (chord * chord) / 4));
+  const useMajorArc = typeId === 'circleInner' || typeId === 'circleOuter';
+  // Arredondado/circulo para dentro usam a bissetriz interna.
+  // Inverso/circulo para fora usam a direcao oposta.
+  const useInternalNormal = typeId === 'roundOuter' || typeId === 'circleInner';
+  const normal = useInternalNormal
+    ? context.bisector
+    : { x: -context.bisector.x, y: -context.bisector.y };
+  const arc = createCornerArcEntity({
+    startPoint: context.trimPointA,
+    endPoint: context.trimPointB,
+    bulgeNormal: normal,
+    sagitta,
+    useMajorArc,
+    layer: context.layer,
+    name: `${baseName} - ${pairLabel}`,
+  });
+  return arc ? [arc] : [];
+}
+
+function updateCornerSelectionInfo() {
+  if (!cornerSelectionInfoEl) return;
+  const lines = getCornerSelectedLines();
+  const total = lines.length;
+  const pairCount = Math.floor(total / 2);
+  const hasOdd = total % 2 === 1;
+  let text = `${total} linha(s)/vertice(s) selecionada(s). ${pairCount} par(es) pronto(s).`;
+  if (hasOdd) text += ' A ultima linha ficou sem par.';
+  if (total < CORNER_MIN_PICK_COUNT) text += ` Selecione pelo menos ${CORNER_MIN_PICK_COUNT}.`;
+  cornerSelectionInfoEl.textContent = text;
+}
+
+function clearCornerSelection() {
+  if (!selectedIds.size) return;
+  selectedIds.clear();
+  setHoveredHandle(null);
+  setActiveHandle(null);
+  rebuildScene();
+  refreshUi();
+  setStatus('Opcao 2: selecao de linhas limpa.');
+}
+
+function closeCornerCommand(options = {}) {
+  const { silent = false } = options;
+  cornerCommandOpen = false;
+  if (cornerCommandPanelEl) cornerCommandPanelEl.hidden = true;
+  actionSlotsController.setActiveSlot(null);
+  updateCornerSelectionInfo();
+  if (!silent) setStatus('Opcao 2 encerrada.');
+}
+
+function applyCornerCommand() {
+  if (!cornerCommandOpen) return false;
+  const sizeMm = parsePositiveMm(cornerSizeEl?.value);
+  if (!sizeMm) {
+    setStatus('Opcao 2: informe raio/profundidade (mm) maior que zero.');
+    cornerSizeEl?.focus();
+    cornerSizeEl?.select();
+    return false;
+  }
+
+  const selectedLines = getCornerSelectedLines();
+  if (selectedLines.length < CORNER_MIN_PICK_COUNT) {
+    setStatus('Opcao 2: selecione no minimo 2 linhas (vertices).');
+    return false;
+  }
+
+  const pairCount = Math.floor(selectedLines.length / 2);
+  const oddLineCount = selectedLines.length % 2;
+  const createdEntities = [];
+  const changedLineIds = new Set();
+  let createdPairs = 0;
+  for (let i = 0; i < pairCount; i += 1) {
+    const lineA = selectedLines[i * 2];
+    const lineB = selectedLines[i * 2 + 1];
+    const context = buildCornerPairContext(lineA, lineB, {
+      typeId: cornerType,
+      sizeMm,
+      pairIndex: i,
+    });
+    if (!context) continue;
+    const generated = buildCornerBridgeEntities(context, {
+      typeId: cornerType,
+      pairIndex: i,
+    });
+    if (!generated.length) continue;
+
+    // Aplica trim nas linhas originais para realmente transformar o canto existente.
+    setLineEndpoint(context.lineA, context.cornerIndexA, context.trimPointA);
+    setLineEndpoint(context.lineB, context.cornerIndexB, context.trimPointB);
+    changedLineIds.add(context.lineA.id);
+    changedLineIds.add(context.lineB.id);
+    createdPairs += 1;
+    createdEntities.push(...generated);
+  }
+
+  if (!createdPairs || !createdEntities.length || !changedLineIds.size) {
+    setStatus('Opcao 2: nao foi possivel gerar cantos para as linhas selecionadas.');
+    return false;
+  }
+
+  pushUndo(`opcao 2 - ${cornerTypeLabel(cornerType).toLowerCase()}`);
+  doc.entities.push(...createdEntities);
+  ensureLayers(doc);
+  selectedIds = new Set([...changedLineIds, ...createdEntities.map((item) => item.id)]);
+  setHoveredHandle(null);
+  setActiveHandle(null);
+  rebuildScene();
+  refreshUi();
+  requestRender();
+
+  let statusMessage = `Opcao 2: ${createdPairs} par(es) transformado(s), ${createdEntities.length} ligacao(oes) criada(s).`;
+  if (oddLineCount) statusMessage += ' 1 linha sem par foi ignorada.';
+  setStatus(statusMessage);
+  return true;
+}
+
+function openCornerCommand() {
+  if (!cornerCommandPanelEl || !cornerSizeEl) return false;
+  closeRectCommand({ silent: true });
+  cornerCommandOpen = true;
+  cornerCommandPanelEl.hidden = false;
+  actionSlotsController.setActiveSlot(2);
+  if (!parsePositiveMm(cornerSizeEl.value)) cornerSizeEl.value = String(CORNER_DEFAULT_MM);
+  setCornerType(cornerType);
+  if (tool !== 'select') setTool('select');
+  updateCornerSelectionInfo();
+  cornerSizeEl.focus();
+  cornerSizeEl.select();
+  setStatus('Opcao 2: selecione linhas (vertices) em pares e clique em Aplicar.');
+  return true;
+}
+
 function rectangleAnchorWorld() {
   if (selectedIds.size) return selectionPivot();
   return { x: controls.target.x, y: controls.target.y };
@@ -456,6 +936,7 @@ function createRectangleFromInput() {
 
 function openRectCommand() {
   if (!rectCommandPanelEl || !rectSizeXEl || !rectSizeYEl) return false;
+  closeCornerCommand({ silent: true });
   rectangleCommandOpen = true;
   rectCommandPanelEl.hidden = false;
   actionSlotsController.setActiveSlot(1);
@@ -937,9 +1418,13 @@ function refreshUi() {
   refreshLayers();
   refreshSelectionInfo();
   refreshProperties();
+  updateCornerSelectionInfo();
 }
 
 function setTool(next) {
+  if (cornerCommandOpen && next === 'vertex') {
+    closeCornerCommand({ silent: true });
+  }
   tool = next;
   if (next !== 'vertex') {
     setHoveredHandle(null);
@@ -1114,6 +1599,21 @@ function startDrag(clientX, clientY, additive = false) {
     const entityId = hit.object.userData.entityId;
     const entity = entityById(entityId);
     if (!isEntityEditable(doc, entity)) return;
+    if (cornerCommandOpen) {
+      if (selectedIds.has(entityId)) {
+        selectedIds.delete(entityId);
+      } else {
+        selectedIds.add(entityId);
+      }
+      setHoveredHandle(null);
+      setActiveHandle(null);
+      rebuildScene();
+      refreshUi();
+      const lineCount = getCornerSelectedLines().length;
+      const pairCount = Math.floor(lineCount / 2);
+      setStatus(`Opcao 2: ${lineCount} linha(s)/vertice(s) selecionada(s), ${pairCount} par(es).`);
+      return;
+    }
     if (!selectedIds.has(entityId)) selectSingle(entityId);
     const moveStart = snapWorld(world);
     const entityIds = [...selectedIds];
@@ -1262,6 +1762,7 @@ function importFromText(text, fileName = 'editado.dxf') {
   hoveredHandle = null;
   activeHandle = null;
   closeRectCommand({ silent: true });
+  closeCornerCommand({ silent: true });
   undoStack = [];
   redoStack = [];
   rebuildLabels();
@@ -1299,6 +1800,7 @@ $('deleteBtn').addEventListener('click', () => {
   pushUndo('excluir');
   deleteSelected(doc, selectedIds);
   selectedIds.clear();
+  updateCornerSelectionInfo();
   setHoveredHandle(null);
   setActiveHandle(null);
   rebuildScene(); refreshUi();
@@ -1355,6 +1857,32 @@ if (rectSizeYEl) {
 if (rectCreateBtnEl) {
   rectCreateBtnEl.addEventListener('click', () => createRectangleFromInput());
 }
+if (cornerCommandPanelEl) {
+  cornerCommandPanelEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+}
+for (const button of cornerTypeButtons) {
+  button.addEventListener('click', () => {
+    setCornerType(button.dataset.cornerType || 'roundOuter');
+    setStatus(`Opcao 2: tipo selecionado - ${cornerTypeLabel(cornerType)}.`);
+  });
+}
+if (cornerSizeEl) {
+  cornerSizeEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      applyCornerCommand();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeCornerCommand();
+    }
+  });
+}
+if (cornerApplyBtnEl) {
+  cornerApplyBtnEl.addEventListener('click', () => applyCornerCommand());
+}
+if (cornerClearBtnEl) {
+  cornerClearBtnEl.addEventListener('click', () => clearCornerSelection());
+}
 
 viewportWrap.addEventListener('dragenter', (e) => { e.preventDefault(); dropHint.style.display = 'block'; });
 viewportWrap.addEventListener('dragover', (e) => { e.preventDefault(); dropHint.style.display = 'block'; });
@@ -1410,8 +1938,12 @@ window.addEventListener('keydown', (e) => {
   const target = e.target;
   const isEscape = e.key === 'Escape';
   const hadRectCommandOpen = isEscape && rectangleCommandOpen;
+  const hadCornerCommandOpen = isEscape && cornerCommandOpen;
   if (hadRectCommandOpen) {
     closeRectCommand({ silent: true });
+  }
+  if (hadCornerCommandOpen) {
+    closeCornerCommand({ silent: true });
   }
   const typing = target && (
     target.tagName === 'INPUT' ||
@@ -1423,6 +1955,7 @@ window.addEventListener('keydown', (e) => {
   if (isEscape) {
     if (selectedIds.size) {
       selectedIds.clear();
+      updateCornerSelectionInfo();
       setHoveredHandle(null);
       setActiveHandle(null);
       rebuildScene();
@@ -1431,6 +1964,8 @@ window.addEventListener('keydown', (e) => {
       updateRectangleDraftPreview();
     } else if (hadRectCommandOpen) {
       setStatus('Opcao 1 encerrada.');
+    } else if (hadCornerCommandOpen) {
+      setStatus('Opcao 2 encerrada.');
     }
     return;
   }
@@ -1439,6 +1974,7 @@ window.addEventListener('keydown', (e) => {
       pushUndo('excluir');
       deleteSelected(doc, selectedIds);
       selectedIds.clear();
+      updateCornerSelectionInfo();
       setHoveredHandle(null);
       setActiveHandle(null);
       rebuildScene();
@@ -1446,6 +1982,16 @@ window.addEventListener('keydown', (e) => {
     }
   }
   if (!e.ctrlKey && !e.metaKey) {
+    const arrowDelta = arrowDeltaFromKey(e.key);
+    if (arrowDelta) {
+      e.preventDefault();
+      const movedByVertex = nudgeActiveVertex(arrowDelta.dx, arrowDelta.dy);
+      const moved = movedByVertex || nudgeSelectedEntities(arrowDelta.dx, arrowDelta.dy);
+      if (moved) {
+        setStatus(`Deslocamento aplicado: ${KEYBOARD_NUDGE_MM} mm por toque.`);
+      }
+      return;
+    }
     const key = String(e.key || '').toLowerCase();
     if (key === 'e') {
       e.preventDefault();
@@ -1481,5 +2027,7 @@ rebuildScene();
 refreshUi();
 renderActionSlots();
 renderActionCard();
+updateCornerTypeButtons();
+updateCornerSelectionInfo();
 animate();
 })();

@@ -132,6 +132,33 @@
         cubeSvg.appendChild(rightFace);
         cubeSvg.appendChild(outline);
         button.appendChild(cubeSvg);
+      } else if (slot.icon === 'corner') {
+        const cornerSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        cornerSvg.setAttribute('viewBox', '0 0 24 24');
+        cornerSvg.setAttribute('class', 'option-slot-icon option-slot-icon--svg');
+        cornerSvg.setAttribute('width', '28');
+        cornerSvg.setAttribute('height', '28');
+        cornerSvg.setAttribute('aria-hidden', 'true');
+
+        const base = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        base.setAttribute('d', 'M4.6 19.4V4.6h14.8');
+        base.setAttribute('fill', 'none');
+        base.setAttribute('stroke', '#dbeafe');
+        base.setAttribute('stroke-width', '1.5');
+        base.setAttribute('stroke-linecap', 'round');
+        base.setAttribute('stroke-linejoin', 'round');
+
+        const roundArc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        roundArc.setAttribute('d', 'M4.6 19.4Q19.4 19.4 19.4 4.6');
+        roundArc.setAttribute('fill', 'none');
+        roundArc.setAttribute('stroke', '#22d3ee');
+        roundArc.setAttribute('stroke-width', '2.1');
+        roundArc.setAttribute('stroke-linecap', 'round');
+        roundArc.setAttribute('stroke-linejoin', 'round');
+
+        cornerSvg.appendChild(base);
+        cornerSvg.appendChild(roundArc);
+        button.appendChild(cornerSvg);
       } else {
         const iconEl = document.createElement('span');
         iconEl.className = 'option-slot-icon option-slot-icon--text';
