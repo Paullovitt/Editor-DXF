@@ -49,6 +49,23 @@ const snapGridEl = $('snapGrid');
 const snapPointsEl = $('snapPoints');
 const actionSlotsApi = window.DxfActionSlots;
 if (!actionSlotsApi) throw new Error('DxfActionSlots nao encontrado. Carregue src/slots/action-slots.js antes de src/app.js.');
+const rotationHudEl = document.createElement('div');
+rotationHudEl.id = 'rotationHud';
+rotationHudEl.className = 'rotation-hud';
+rotationHudEl.hidden = true;
+rotationHudEl.innerHTML = `
+  <svg class="rotation-hud-svg" viewBox="-58 -58 116 116" aria-hidden="true">
+    <line class="rotation-hud-base" x1="0" y1="0" x2="38" y2="0"></line>
+    <line class="rotation-hud-arm" x1="0" y1="0" x2="38" y2="0"></line>
+    <path class="rotation-hud-arc" d="M 38 0"></path>
+    <circle class="rotation-hud-center" cx="0" cy="0" r="2"></circle>
+  </svg>
+  <div class="rotation-hud-value">0.00 deg</div>
+`;
+viewportWrap.appendChild(rotationHudEl);
+const rotationHudArmEl = rotationHudEl.querySelector('.rotation-hud-arm');
+const rotationHudArcEl = rotationHudEl.querySelector('.rotation-hud-arc');
+const rotationHudValueEl = rotationHudEl.querySelector('.rotation-hud-value');
 
 const renderer = new THREE.WebGLRenderer({ canvas: viewport, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -96,18 +113,24 @@ let option3CommandOpen = false;
 let cornerCommandOpen = false;
 let option3Type = 'circle';
 let cornerType = 'roundOuter';
+let rotationHudState = null;
+let rotationHudHideTimer = null;
 const ENTITY_PICK_RADIUS_PX = 2;
 const VERTEX_PICK_RADIUS_PX = 14;
 const VERTEX_DRAG_DEADZONE_PX = 3;
 const VERTEX_DRAG_CLICK_GUARD_PX = 8;
 const VERTEX_DRAG_CLICK_GUARD_MS = 180;
 const KEYBOARD_NUDGE_MM = 1;
+const KEYBOARD_ROTATE_STEP_DEG = 1;
 const OPTION3_DEFAULT_RADIUS_MM = 10;
 const OPTION3_DEFAULT_SPAN_MM = 40;
 const OPTION3_TYPE_IDS = new Set(['circle', 'capsule90']);
 const CORNER_DEFAULT_MM = 10;
 const CORNER_MIN_PICK_COUNT = 2;
 const LINE_CONNECTION_TOLERANCE_MM = 0.05;
+const ROTATION_HUD_TIMEOUT_MS = 1400;
+const ROTATION_HUD_RADIUS_PX = 38;
+const ROTATION_HUD_PIVOT_TOL_MM = 0.25;
 const CORNER_TYPE_IDS = new Set([
   'roundOuter',
   'squareInner',
@@ -231,9 +254,97 @@ function transformSelection(label, fn) {
   refreshUi();
   return true;
 }
+function rotationDirectionLabel(angleDeg) {
+  return angleDeg >= 0 ? 'esquerda' : 'direita';
+}
+
+function normalizeAccumulatedRotation(angleDeg) {
+  let normalized = Number(angleDeg) || 0;
+  if (normalized > 360 || normalized < -360) normalized %= 360;
+  return normalized;
+}
+
+function updateRotationHudPosition() {
+  if (!rotationHudState || rotationHudEl.hidden) return;
+  const screen = screenFromWorld(rotationHudState.pivot);
+  if (!Number.isFinite(screen.x) || !Number.isFinite(screen.y)) return;
+  rotationHudEl.style.left = `${screen.x}px`;
+  rotationHudEl.style.top = `${screen.y}px`;
+}
+
+function rotationHudArcPath(angleDeg, radiusPx) {
+  const safeRadius = Math.max(1, Number(radiusPx) || 1);
+  const safeAngle = Number(angleDeg) || 0;
+  if (Math.abs(safeAngle) < 0.001) return `M ${safeRadius.toFixed(2)} 0`;
+  const steps = Math.max(10, Math.ceil(Math.abs(safeAngle) / 6));
+  let path = `M ${safeRadius.toFixed(2)} 0`;
+  for (let i = 1; i <= steps; i += 1) {
+    const a = THREE.MathUtils.degToRad(safeAngle * (i / steps));
+    const x = Math.cos(a) * safeRadius;
+    const y = -Math.sin(a) * safeRadius;
+    path += ` L ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }
+  return path;
+}
+
+function renderRotationHud() {
+  if (!rotationHudState) return;
+  const angleDeg = Number(rotationHudState.totalDeg) || 0;
+  const angleRad = THREE.MathUtils.degToRad(angleDeg);
+  const x = Math.cos(angleRad) * ROTATION_HUD_RADIUS_PX;
+  const y = -Math.sin(angleRad) * ROTATION_HUD_RADIUS_PX;
+  rotationHudArmEl?.setAttribute('x2', x.toFixed(2));
+  rotationHudArmEl?.setAttribute('y2', y.toFixed(2));
+  rotationHudArcEl?.setAttribute('d', rotationHudArcPath(angleDeg, ROTATION_HUD_RADIUS_PX));
+  if (rotationHudValueEl) {
+    const direction = angleDeg >= 0 ? 'Esq' : 'Dir';
+    rotationHudValueEl.textContent = `${Math.abs(angleDeg).toFixed(2)} deg (${direction})`;
+  }
+  rotationHudEl.hidden = false;
+  updateRotationHudPosition();
+}
+
+function hideRotationHud() {
+  if (rotationHudHideTimer) {
+    clearTimeout(rotationHudHideTimer);
+    rotationHudHideTimer = null;
+  }
+  rotationHudState = null;
+  rotationHudEl.hidden = true;
+}
+
+function showRotationHud(pivot, deltaDeg) {
+  if (!pivot || !Number.isFinite(pivot.x) || !Number.isFinite(pivot.y)) return;
+  const nowMs = performance.now();
+  const previous = rotationHudState;
+  const samePivot = Boolean(previous && distance(previous.pivot, pivot) <= ROTATION_HUD_PIVOT_TOL_MM);
+  const continuous = Boolean(previous && samePivot && (nowMs - previous.updatedAtMs) <= ROTATION_HUD_TIMEOUT_MS);
+  const totalDeg = normalizeAccumulatedRotation((continuous ? previous.totalDeg : 0) + deltaDeg);
+  rotationHudState = {
+    pivot: { x: pivot.x, y: pivot.y },
+    totalDeg,
+    updatedAtMs: nowMs,
+  };
+  renderRotationHud();
+  if (rotationHudHideTimer) clearTimeout(rotationHudHideTimer);
+  rotationHudHideTimer = setTimeout(() => hideRotationHud(), ROTATION_HUD_TIMEOUT_MS);
+}
+
 function rotateSelected(angleDeg) {
-  const changed = transformSelection(`rotacionar ${angleDeg}`, (entity, pivot) => rotateEntity(entity, angleDeg, pivot));
-  if (!changed) setStatus('Selecione uma peca para rotacionar.');
+  const hasSelection = selectedIds.size > 0;
+  if (!hasSelection) {
+    setStatus('Selecione uma peca para rotacionar.');
+    return false;
+  }
+  const pivot = selectionPivot();
+  const changed = transformSelection(`rotacionar ${angleDeg}`, (entity, center) => rotateEntity(entity, angleDeg, center));
+  if (!changed) {
+    setStatus('Selecione uma peca para rotacionar.');
+    return false;
+  }
+  showRotationHud(pivot, angleDeg);
+  setStatus(`Rotacao aplicada: ${Math.abs(angleDeg).toFixed(2)} deg para ${rotationDirectionLabel(angleDeg)}.`);
+  return true;
 }
 
 // Converte seta do teclado em deslocamento fixo (1 mm por toque).
@@ -294,6 +405,7 @@ function restoreFrom(serialized) {
   selectedIds.clear();
   hoveredHandle = null;
   activeHandle = null;
+  hideRotationHud();
   closeRectCommand({ silent: true });
   closeOption3Command({ silent: true });
   closeCornerCommand({ silent: true });
@@ -765,6 +877,7 @@ function updateCornerSelectionInfo() {
 function clearCornerSelection() {
   if (!selectedIds.size) return;
   selectedIds.clear();
+  hideRotationHud();
   setHoveredHandle(null);
   setActiveHandle(null);
   rebuildScene();
@@ -1875,7 +1988,10 @@ function rebuildLabels() {
 }
 
 function updateLabelPositions() {
-  if (!measurementLabels.length) return;
+  if (!measurementLabels.length) {
+    updateRotationHudPosition();
+    return;
+  }
   const rect = renderer.domElement.getBoundingClientRect();
   for (const item of measurementLabels) {
     const v = new THREE.Vector3(item.worldPos.x, item.worldPos.y, 0).project(camera);
@@ -1891,6 +2007,7 @@ function updateLabelPositions() {
       activeMeasurementEditor.input.style.top = item.el.style.top;
     }
   }
+  updateRotationHudPosition();
 }
 
 function fitView() {
@@ -2410,6 +2527,7 @@ function importFromText(text, fileName = 'editado.dxf') {
   selectedIds.clear();
   hoveredHandle = null;
   activeHandle = null;
+  hideRotationHud();
   closeRectCommand({ silent: true });
   closeOption3Command({ silent: true });
   closeCornerCommand({ silent: true });
@@ -2450,6 +2568,7 @@ $('deleteBtn').addEventListener('click', () => {
   pushUndo('excluir');
   deleteSelected(doc, selectedIds);
   selectedIds.clear();
+  hideRotationHud();
   updateCornerSelectionInfo();
   setHoveredHandle(null);
   setActiveHandle(null);
@@ -2648,6 +2767,7 @@ window.addEventListener('keydown', (e) => {
   if (isEscape) {
     if (selectedIds.size) {
       selectedIds.clear();
+      hideRotationHud();
       updateCornerSelectionInfo();
       setHoveredHandle(null);
       setActiveHandle(null);
@@ -2669,6 +2789,7 @@ window.addEventListener('keydown', (e) => {
       pushUndo('excluir');
       deleteSelected(doc, selectedIds);
       selectedIds.clear();
+      hideRotationHud();
       updateCornerSelectionInfo();
       setHoveredHandle(null);
       setActiveHandle(null);
@@ -2696,6 +2817,16 @@ window.addEventListener('keydown', (e) => {
     if (key === 'r') {
       e.preventDefault();
       rotateSelected(45);
+      return;
+    }
+    if (key === 't') {
+      e.preventDefault();
+      rotateSelected(KEYBOARD_ROTATE_STEP_DEG);
+      return;
+    }
+    if (key === 'y') {
+      e.preventDefault();
+      rotateSelected(-KEYBOARD_ROTATE_STEP_DEG);
       return;
     }
   }

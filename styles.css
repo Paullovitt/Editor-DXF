@@ -113,6 +113,54 @@ button:hover, .button:hover { border-color: var(--accent); }
   color: #d1fae5;
   background: rgba(6, 78, 59, 0.78);
 }
+.rotation-hud {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.rotation-hud[hidden] {
+  display: none;
+}
+.rotation-hud-svg {
+  width: 118px;
+  height: 118px;
+}
+.rotation-hud-base,
+.rotation-hud-arm,
+.rotation-hud-arc {
+  fill: none;
+  stroke-linecap: round;
+}
+.rotation-hud-base {
+  stroke: rgba(226, 232, 240, 0.8);
+  stroke-width: 1.6;
+}
+.rotation-hud-arm {
+  stroke: #22d3ee;
+  stroke-width: 2.1;
+}
+.rotation-hud-arc {
+  stroke: #c084fc;
+  stroke-width: 1.9;
+}
+.rotation-hud-center {
+  fill: #e2e8f0;
+}
+.rotation-hud-value {
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid #c084fc;
+  background: rgba(59, 7, 100, 0.82);
+  color: #f3e8ff;
+  white-space: nowrap;
+}
 #selectionRect {
   position: absolute; display: none; border: 1px dashed var(--accent); background: rgba(56, 189, 248, 0.12); pointer-events: none;
 }

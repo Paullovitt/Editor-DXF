@@ -105,6 +105,8 @@ Solucao:
 - Grade estendida para manter o fundo continuo durante navegacao.
 - Rotacionar/Escalar/Espelhar agora aplicam no centro do conjunto selecionado.
 - Atalhos de rotacao: `E` = 90 graus, `R` = 45 graus.
+- Atalhos de rotacao fina: `T` gira 1 grau para esquerda e `Y` gira 1 grau para direita por toque.
+- Ao rotacionar, um indicador visual de angulo aparece no viewport (linha base, braco de rotacao, arco e valor em graus).
 - Botoes `Undo/Redo` removidos da barra (mantidos atalhos `Ctrl+Z` e `Ctrl+Y`).
 - Setas do teclado (`<-`, `->`, `^`, `v`) deslocam a selecao atual em passos de `1 mm`; no modo `Vertices`, com bolinha ativa (vermelha), o passo de `1 mm` e aplicado no vertice ativo.
 - Exportacao usa o mesmo nome do arquivo original (sem sufixo `_editado`).
