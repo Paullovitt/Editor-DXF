@@ -82,6 +82,8 @@ Solucao:
 - Painel do objeto/propriedades mostra o tamanho da peca em `X` e `Y` (mm) logo abaixo do codigo.
 - Painel `Objeto` foi simplificado para exibir apenas codigo, tamanho X e tamanho Y.
 - Selecao por `Janela` exibe cotas no viewport para linhas/polilinhas e tambem medidas adequadas para geometrias curvas: `R` (raio), `D` (diametro), `C` (circunferencia), `Ang` (graus) e `A` (comprimento de arco) em circulos/arcos/cantos.
+- No modo `Janela`, etiquetas de medida/raio/diametro/angulo/comprimento de arco podem ser clicadas para edicao direta; ao pressionar `Enter`, a nova medida e aplicada na geometria correspondente.
+- Na edicao de medidas lineares no modo `Janela`, a linha mantem o vertice de referencia conectado e estende apenas a outra ponta no sentido do eixo da linha (evita crescimento pelos dois lados).
 - No modo `Janela`, clique simples sobre a geometria agora tambem seleciona 1 vertice/linha (sem precisar arrastar retangulo).
 - Handles de vertice reduzidos para melhor leitura da geometria.
 - Pontos amarelos de vertice ajustados para 2.1x do tamanho base atual.
@@ -115,6 +117,7 @@ Solucao:
 - Slot `Opcao 2` agora exibe icone de canto e abre painel de cantos com 6 subopcoes (arredondado, quadrado para dentro, linha 45, circulo inverso para dentro, circulo para dentro e circulo para fora), exigindo no minimo 2 linhas selecionadas (vertices) e processando em pares na ordem da selecao.
 - A `Opcao 2` usa campo de `Raio/Prof. (mm)` com valor inicial de `10 mm` e gera ligacoes por par de linhas selecionadas (vertices) conforme o tipo escolhido.
 - A `Opcao 2` aplica transformacao real no canto: faz `trim` das duas linhas do par no vertice e insere apenas a ligacao correspondente ao tipo escolhido (sem manter a quina original inteira).
+- Slot `Opcao 3` agora exibe icone proprio e abre painel com 2 subopcoes: `Circulo` (raio em mm) e `Capsula 90` (raio + distancia ponta a ponta em mm), criando a geometria no centro da vista/selecao.
 - Padrao adotado para as proximas geometrias das `Opcoes`: gerar contorno em entidades segmentadas (`LINE`) para manter vertices editaveis e evitar geometria em linha unica.
 
 ## Licenca 

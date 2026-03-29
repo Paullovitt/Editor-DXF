@@ -75,6 +75,37 @@
           </div>
           <div class="small">Enter em X vai para Y. Enter em Y cria o retangulo.</div>
         </div>
+        <div id="option3CommandPanel" class="option3-command-panel" hidden>
+          <div class="option3-command-head">
+            <strong>Formas (Opcao 3)</strong>
+            <span class="small">Raio e medidas em milimetros.</span>
+          </div>
+          <div class="option3-type-grid" role="group" aria-label="Tipos da opcao 3">
+            <button type="button" class="option3-type-btn is-active" data-option3-type="circle" aria-label="Circulo">
+              <svg viewBox="0 0 24 24" class="option3-type-icon" aria-hidden="true">
+                <circle cx="12" cy="12" r="7.4" fill="none" stroke="#22d3ee" stroke-width="2.2" />
+                <circle cx="12" cy="12" r="1.5" fill="#e2e8f0" />
+              </svg>
+              <span>Circulo</span>
+            </button>
+            <button type="button" class="option3-type-btn" data-option3-type="capsule90" aria-label="Capsula angulo reto">
+              <svg viewBox="0 0 24 24" class="option3-type-icon" aria-hidden="true">
+                <path d="M7 7h10a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8Z" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linejoin="round" />
+              </svg>
+              <span>Capsula 90</span>
+            </button>
+          </div>
+          <div class="option3-command-row">
+            <label for="option3Radius">Raio (mm)</label>
+            <input id="option3Radius" type="number" min="0.001" step="0.01" value="10" autocomplete="off" />
+            <div id="option3SpanWrap" class="option3-span-wrap">
+              <label for="option3Span">Dist. ponta a ponta (mm)</label>
+              <input id="option3Span" type="number" min="0.001" step="0.01" value="40" autocomplete="off" />
+            </div>
+            <button id="option3ApplyBtn" type="button">Criar</button>
+          </div>
+          <div class="small">A forma nasce no centro da vista/selecionados. Enter aplica.</div>
+        </div>
         <div id="cornerCommandPanel" class="corner-command-panel" hidden>
           <div class="corner-command-head">
             <strong>Cantos (Opcao 2)</strong>

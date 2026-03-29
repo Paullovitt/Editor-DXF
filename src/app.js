@@ -24,6 +24,12 @@ const rectCommandPanelEl = $('rectCommandPanel');
 const rectSizeXEl = $('rectSizeX');
 const rectSizeYEl = $('rectSizeY');
 const rectCreateBtnEl = $('rectCreateBtn');
+const option3CommandPanelEl = $('option3CommandPanel');
+const option3RadiusEl = $('option3Radius');
+const option3SpanEl = $('option3Span');
+const option3SpanWrapEl = $('option3SpanWrap');
+const option3ApplyBtnEl = $('option3ApplyBtn');
+const option3TypeButtons = [...document.querySelectorAll('.option3-type-btn')];
 const cornerCommandPanelEl = $('cornerCommandPanel');
 const cornerSizeEl = $('cornerSize');
 const cornerApplyBtnEl = $('cornerApplyBtn');
@@ -79,13 +85,16 @@ let tool = 'select';
 let dragState = null;
 let meshByEntityId = new Map();
 let measurementLabels = [];
+let activeMeasurementEditor = null;
 let currentFileName = 'editado.dxf';
 let undoStack = [];
 let redoStack = [];
 let needsRender = true;
 let pendingZoom = null;
 let rectangleCommandOpen = false;
+let option3CommandOpen = false;
 let cornerCommandOpen = false;
+let option3Type = 'circle';
 let cornerType = 'roundOuter';
 const ENTITY_PICK_RADIUS_PX = 2;
 const VERTEX_PICK_RADIUS_PX = 14;
@@ -93,8 +102,12 @@ const VERTEX_DRAG_DEADZONE_PX = 3;
 const VERTEX_DRAG_CLICK_GUARD_PX = 8;
 const VERTEX_DRAG_CLICK_GUARD_MS = 180;
 const KEYBOARD_NUDGE_MM = 1;
+const OPTION3_DEFAULT_RADIUS_MM = 10;
+const OPTION3_DEFAULT_SPAN_MM = 40;
+const OPTION3_TYPE_IDS = new Set(['circle', 'capsule90']);
 const CORNER_DEFAULT_MM = 10;
 const CORNER_MIN_PICK_COUNT = 2;
+const LINE_CONNECTION_TOLERANCE_MM = 0.05;
 const CORNER_TYPE_IDS = new Set([
   'roundOuter',
   'squareInner',
@@ -180,6 +193,17 @@ actionSlotsController.registerHandler(2, () => {
   return opened
     ? { ok: true, detail: 'Opcao 2 ativa: selecione linhas (vertices) em pares e aplique o tipo de canto.' }
     : { ok: false, detail: 'Nao foi possivel abrir a Opcao 2.' };
+});
+actionSlotsController.setSlotMeta(3, {
+  label: 'Criar circulos',
+  icon: 'circle-shape',
+  allowedTools: ['select', 'vertex', 'window'],
+});
+actionSlotsController.registerHandler(3, () => {
+  const opened = openOption3Command();
+  return opened
+    ? { ok: true, detail: 'Opcao 3 ativa: escolha circulo ou capsula 90 e informe as medidas em mm.' }
+    : { ok: false, detail: 'Nao foi possivel abrir a Opcao 3.' };
 });
 function selectionPivot() {
   const entities = [...selectedIds].map((id) => entityById(id)).filter(Boolean);
@@ -271,6 +295,7 @@ function restoreFrom(serialized) {
   hoveredHandle = null;
   activeHandle = null;
   closeRectCommand({ silent: true });
+  closeOption3Command({ silent: true });
   closeCornerCommand({ silent: true });
   rebuildScene();
   refreshUi();
@@ -747,6 +772,159 @@ function clearCornerSelection() {
   setStatus('Opcao 2: selecao de linhas limpa.');
 }
 
+function option3TypeLabel(typeId) {
+  if (typeId === 'capsule90') return 'Capsula 90';
+  return 'Circulo';
+}
+
+function updateOption3TypeButtons() {
+  for (const button of option3TypeButtons) {
+    const isActive = button.dataset.option3Type === option3Type;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  }
+  if (option3SpanWrapEl) {
+    option3SpanWrapEl.hidden = option3Type !== 'capsule90';
+  }
+}
+
+function setOption3Type(typeId) {
+  if (!OPTION3_TYPE_IDS.has(typeId)) return;
+  option3Type = typeId;
+  updateOption3TypeButtons();
+}
+
+function createArcEntity(center, radius, startAngleDeg, endAngleDeg, layer = '0', name = 'Arco') {
+  return {
+    id: createRuntimeEntityId('shape3'),
+    type: 'ARC',
+    layer,
+    cx: center.x,
+    cy: center.y,
+    r: radius,
+    startAngle: normalizeDeg(startAngleDeg),
+    endAngle: normalizeDeg(endAngleDeg),
+    name,
+  };
+}
+
+function createCircleEntity(center, radius, layer = '0', name = 'Circulo') {
+  return {
+    id: createRuntimeEntityId('shape3'),
+    type: 'CIRCLE',
+    layer,
+    cx: center.x,
+    cy: center.y,
+    r: radius,
+    name,
+  };
+}
+
+function createCapsule90Entities(center, radius, tipToTipDistance, layer = '0') {
+  const safeRadius = Math.max(0.001, radius);
+  const totalDistance = Math.max(safeRadius * 2, tipToTipDistance);
+  const centerGap = totalDistance - safeRadius * 2;
+  // Se a distancia ponta-a-ponta for igual ao diametro, a capsula degenera em circulo.
+  if (centerGap <= 1e-6) {
+    return [createCircleEntity(center, safeRadius, layer, `Capsula 90 (degenerada) R${safeRadius.toFixed(2)}`)];
+  }
+
+  const halfGap = centerGap / 2;
+  const leftCenter = { x: center.x - halfGap, y: center.y };
+  const rightCenter = { x: center.x + halfGap, y: center.y };
+  const yTop = center.y + safeRadius;
+  const yBottom = center.y - safeRadius;
+
+  return [
+    createLineEntity(
+      { x: leftCenter.x, y: yTop },
+      { x: rightCenter.x, y: yTop },
+      layer,
+      `Capsula 90 topo ${totalDistance.toFixed(2)}`
+    ),
+    createArcEntity(rightCenter, safeRadius, 270, 90, layer, 'Capsula 90 arco direito'),
+    createLineEntity(
+      { x: rightCenter.x, y: yBottom },
+      { x: leftCenter.x, y: yBottom },
+      layer,
+      `Capsula 90 base ${totalDistance.toFixed(2)}`
+    ),
+    createArcEntity(leftCenter, safeRadius, 90, 270, layer, 'Capsula 90 arco esquerdo'),
+  ];
+}
+
+function closeOption3Command(options = {}) {
+  const { silent = false } = options;
+  option3CommandOpen = false;
+  if (option3CommandPanelEl) option3CommandPanelEl.hidden = true;
+  actionSlotsController.setActiveSlot(null);
+  if (!silent) setStatus('Opcao 3 encerrada.');
+}
+
+function applyOption3Command() {
+  if (!option3CommandOpen) return false;
+  const radiusMm = parsePositiveMm(option3RadiusEl?.value);
+  if (!radiusMm) {
+    setStatus('Opcao 3: informe raio (mm) maior que zero.');
+    option3RadiusEl?.focus();
+    option3RadiusEl?.select();
+    return false;
+  }
+
+  let entities = [];
+  const anchor = rectangleAnchorWorld();
+  if (option3Type === 'circle') {
+    entities = [createCircleEntity(anchor, radiusMm, '0', `Circulo R${radiusMm.toFixed(2)}`)];
+  } else {
+    const spanMm = parsePositiveMm(option3SpanEl?.value);
+    if (!spanMm) {
+      setStatus('Opcao 3: informe distancia ponta a ponta (mm) maior que zero.');
+      option3SpanEl?.focus();
+      option3SpanEl?.select();
+      return false;
+    }
+    entities = createCapsule90Entities(anchor, radiusMm, spanMm, '0');
+  }
+  if (!entities.length) {
+    setStatus('Opcao 3: nao foi possivel gerar a geometria.');
+    return false;
+  }
+
+  pushUndo(`opcao 3 - ${option3TypeLabel(option3Type).toLowerCase()}`);
+  doc.entities.push(...entities);
+  ensureLayers(doc);
+  selectedIds = new Set(entities.map((item) => item.id));
+  setHoveredHandle(null);
+  setActiveHandle(null);
+  closeOption3Command({ silent: true });
+  rebuildScene();
+  refreshUi();
+  requestRender();
+
+  const statusSuffix = option3Type === 'capsule90'
+    ? `raio ${radiusMm.toFixed(2)} mm, distancia ${(parsePositiveMm(option3SpanEl?.value) || 0).toFixed(2)} mm`
+    : `raio ${radiusMm.toFixed(2)} mm`;
+  setStatus(`Opcao 3: ${option3TypeLabel(option3Type)} criado (${statusSuffix}).`);
+  return true;
+}
+
+function openOption3Command() {
+  if (!option3CommandPanelEl || !option3RadiusEl || !option3SpanEl) return false;
+  closeRectCommand({ silent: true });
+  closeCornerCommand({ silent: true });
+  option3CommandOpen = true;
+  option3CommandPanelEl.hidden = false;
+  actionSlotsController.setActiveSlot(3);
+  if (!parsePositiveMm(option3RadiusEl.value)) option3RadiusEl.value = String(OPTION3_DEFAULT_RADIUS_MM);
+  if (!parsePositiveMm(option3SpanEl.value)) option3SpanEl.value = String(OPTION3_DEFAULT_SPAN_MM);
+  setOption3Type(option3Type);
+  if (tool !== 'select') setTool('select');
+  option3RadiusEl.focus();
+  option3RadiusEl.select();
+  setStatus('Opcao 3: escolha o tipo, informe medidas em mm e clique em Criar.');
+  return true;
+}
+
 function closeCornerCommand(options = {}) {
   const { silent = false } = options;
   cornerCommandOpen = false;
@@ -825,6 +1003,7 @@ function applyCornerCommand() {
 function openCornerCommand() {
   if (!cornerCommandPanelEl || !cornerSizeEl) return false;
   closeRectCommand({ silent: true });
+  closeOption3Command({ silent: true });
   cornerCommandOpen = true;
   cornerCommandPanelEl.hidden = false;
   actionSlotsController.setActiveSlot(2);
@@ -937,6 +1116,7 @@ function createRectangleFromInput() {
 
 function openRectCommand() {
   if (!rectCommandPanelEl || !rectSizeXEl || !rectSizeYEl) return false;
+  closeOption3Command({ silent: true });
   closeCornerCommand({ silent: true });
   rectangleCommandOpen = true;
   rectCommandPanelEl.hidden = false;
@@ -1172,6 +1352,7 @@ function rebuildScene() {
 }
 
 function clearMeasurements() {
+  closeMeasurementEditor({ apply: false, silent: true });
   while (measureRoot.children.length) {
     const c = measureRoot.children.pop();
     c.geometry?.dispose?.();
@@ -1191,6 +1372,8 @@ function collectMeasurementItems() {
     if (e.type === 'LINE') {
       items.push({
         kind: 'segment',
+        entityId: e.id,
+        entityType: e.type,
         start: { x: e.x1, y: e.y1 },
         end: { x: e.x2, y: e.y2 },
       });
@@ -1198,6 +1381,8 @@ function collectMeasurementItems() {
       if (Math.abs(Number(e.r) || 0) > 1e-6) {
         items.push({
           kind: 'circle',
+          entityId: e.id,
+          entityType: e.type,
           cx: Number(e.cx) || 0,
           cy: Number(e.cy) || 0,
           r: Math.abs(Number(e.r) || 0),
@@ -1207,6 +1392,8 @@ function collectMeasurementItems() {
       if (Math.abs(Number(e.r) || 0) > 1e-6) {
         items.push({
           kind: 'arc',
+          entityId: e.id,
+          entityType: e.type,
           cx: Number(e.cx) || 0,
           cy: Number(e.cy) || 0,
           r: Math.abs(Number(e.r) || 0),
@@ -1218,6 +1405,8 @@ function collectMeasurementItems() {
       for (let i = 1; i < e.points.length; i += 1) {
         items.push({
           kind: 'segment',
+          entityId: e.id,
+          entityType: 'POLY',
           start: e.points[i - 1],
           end: e.points[i],
         });
@@ -1226,6 +1415,8 @@ function collectMeasurementItems() {
       if (e.closed && e.points.length > 2 && items.length < MAX_ITEMS) {
         items.push({
           kind: 'segment',
+          entityId: e.id,
+          entityType: 'POLY',
           start: e.points[e.points.length - 1],
           end: e.points[0],
         });
@@ -1236,12 +1427,235 @@ function collectMeasurementItems() {
   return items.slice(0, MAX_ITEMS);
 }
 
-function addMeasurementLabel(worldPos, text, kind = 'linear') {
+function addMeasurementLabel(worldPos, text, kind = 'linear', edit = null) {
   const el = document.createElement('div');
   el.className = `measure-label measure-label--${kind}`;
   el.textContent = text;
   labelsLayer.appendChild(el);
-  measurementLabels.push({ el, worldPos });
+  const item = { el, worldPos, edit };
+  measurementLabels.push(item);
+
+  if (edit) {
+    el.classList.add('measure-label--editable');
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.title = 'Clique para editar. Enter aplica.';
+    const openEditor = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openMeasurementEditor(item);
+    };
+    el.addEventListener('click', openEditor);
+    el.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') openEditor(event);
+    });
+  }
+}
+
+function countLineConnectionAtPoint(entityId, point) {
+  let count = 0;
+  for (const entity of doc.entities) {
+    if (!entity || entity.id === entityId) continue;
+    const points = [];
+    if (entity.type === 'LINE') {
+      points.push(
+        { x: Number(entity.x1) || 0, y: Number(entity.y1) || 0 },
+        { x: Number(entity.x2) || 0, y: Number(entity.y2) || 0 }
+      );
+    } else if (entity.type === 'ARC') {
+      const radius = Math.abs(Number(entity.r) || 0);
+      if (radius > 1e-9) {
+        const start = THREE.MathUtils.degToRad(Number(entity.startAngle) || 0);
+        const end = THREE.MathUtils.degToRad(Number(entity.endAngle) || 0);
+        const cx = Number(entity.cx) || 0;
+        const cy = Number(entity.cy) || 0;
+        points.push(
+          { x: cx + Math.cos(start) * radius, y: cy + Math.sin(start) * radius },
+          { x: cx + Math.cos(end) * radius, y: cy + Math.sin(end) * radius }
+        );
+      }
+    } else if (entity.points?.length) {
+      for (const p of entity.points) {
+        points.push({ x: Number(p.x) || 0, y: Number(p.y) || 0 });
+      }
+    } else if (entity.type === 'POINT') {
+      points.push({ x: Number(entity.x) || 0, y: Number(entity.y) || 0 });
+    }
+    if (points.some((candidate) => distance(candidate, point) <= LINE_CONNECTION_TOLERANCE_MM)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function pickLineLengthAnchorEndpoint(line) {
+  const p1 = { x: Number(line.x1) || 0, y: Number(line.y1) || 0 };
+  const p2 = { x: Number(line.x2) || 0, y: Number(line.y2) || 0 };
+  const c1 = countLineConnectionAtPoint(line.id, p1);
+  const c2 = countLineConnectionAtPoint(line.id, p2);
+  if (c1 !== c2) return c1 > c2 ? 0 : 1;
+
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    // Empate: em linhas no eixo X, ancora o menor X para crescer para frente no X.
+    return p1.x <= p2.x ? 0 : 1;
+  }
+  // Empate: em linhas no eixo Y, ancora o menor Y para crescer para frente no Y.
+  return p1.y <= p2.y ? 0 : 1;
+}
+
+function setLineLengthFromAnchor(line, targetLength, anchorEndpointIndex) {
+  const safeLength = Math.max(0.001, targetLength);
+  const anchorIsStart = anchorEndpointIndex === 0;
+  const anchor = anchorIsStart
+    ? { x: Number(line.x1) || 0, y: Number(line.y1) || 0 }
+    : { x: Number(line.x2) || 0, y: Number(line.y2) || 0 };
+  const moving = anchorIsStart
+    ? { x: Number(line.x2) || 0, y: Number(line.y2) || 0 }
+    : { x: Number(line.x1) || 0, y: Number(line.y1) || 0 };
+  let dx = moving.x - anchor.x;
+  let dy = moving.y - anchor.y;
+  let len = Math.hypot(dx, dy);
+  if (len < 1e-6) {
+    dx = 1;
+    dy = 0;
+    len = 1;
+  }
+  const ux = dx / len;
+  const uy = dy / len;
+  const newMoving = {
+    x: anchor.x + ux * safeLength,
+    y: anchor.y + uy * safeLength,
+  };
+  if (anchorIsStart) {
+    line.x2 = newMoving.x;
+    line.y2 = newMoving.y;
+    return;
+  }
+  line.x1 = newMoving.x;
+  line.y1 = newMoving.y;
+}
+
+function arcSweepDeg(entity) {
+  const start = Number(entity.startAngle) || 0;
+  const end = Number(entity.endAngle) || 0;
+  return normalizeDeg(end - start);
+}
+
+function applyMeasurementLineLength(entityId, valueMm) {
+  const entity = entityById(entityId);
+  if (!entity || entity.type !== 'LINE') return false;
+  pushUndo('editar medida linear');
+  const anchorIndex = pickLineLengthAnchorEndpoint(entity);
+  setLineLengthFromAnchor(entity, valueMm, anchorIndex);
+  return true;
+}
+
+function applyMeasurementCircleRadius(entityId, valueMm) {
+  const entity = entityById(entityId);
+  if (!entity || entity.type !== 'CIRCLE') return false;
+  pushUndo('editar raio do circulo');
+  entity.r = Math.max(0.001, valueMm);
+  return true;
+}
+
+function applyMeasurementArcRadius(entityId, valueMm) {
+  const entity = entityById(entityId);
+  if (!entity || entity.type !== 'ARC') return false;
+  pushUndo('editar raio do arco');
+  entity.r = Math.max(0.001, valueMm);
+  return true;
+}
+
+function applyMeasurementArcSweep(entityId, valueDeg) {
+  const entity = entityById(entityId);
+  if (!entity || entity.type !== 'ARC') return false;
+  const safeDeg = clampValue(valueDeg, 0.1, 359.999);
+  pushUndo('editar angulo do arco');
+  const start = Number(entity.startAngle) || 0;
+  entity.endAngle = normalizeDeg(start + safeDeg);
+  return true;
+}
+
+function applyMeasurementArcLength(entityId, valueMm) {
+  const entity = entityById(entityId);
+  if (!entity || entity.type !== 'ARC') return false;
+  if ((Number(entity.r) || 0) <= 1e-6) return false;
+  const sweepDeg = THREE.MathUtils.radToDeg(valueMm / entity.r);
+  return applyMeasurementArcSweep(entityId, sweepDeg);
+}
+
+function closeMeasurementEditor(options = {}) {
+  const { apply = false, silent = false } = options;
+  if (!activeMeasurementEditor) return false;
+  const { input, labelItem } = activeMeasurementEditor;
+  activeMeasurementEditor = null;
+
+  let applied = false;
+  if (apply && labelItem?.edit?.applyValue) {
+    const raw = String(input.value ?? '').trim();
+    const value = parsePositiveMm(raw);
+    if (!value) {
+      if (!silent) setStatus('Medida invalida. Informe valor maior que zero.');
+    } else if (labelItem.edit.applyValue(value)) {
+      applied = true;
+      if (!silent) {
+        setStatus(labelItem.edit.successMessage
+          ? labelItem.edit.successMessage(value)
+          : `Medida aplicada: ${value.toFixed(2)} ${labelItem.edit.unit || 'mm'}.`);
+      }
+    } else if (!silent) {
+      setStatus('Nao foi possivel aplicar a medida nesta geometria.');
+    }
+  }
+
+  if (labelItem?.el && labelItem.el.isConnected) labelItem.el.style.visibility = '';
+  input?.remove?.();
+
+  if (applied) {
+    rebuildScene();
+    refreshUi();
+    updateRectangleDraftPreview();
+    requestRender();
+  }
+  return applied;
+}
+
+function openMeasurementEditor(labelItem) {
+  if (!labelItem?.edit) return;
+  closeMeasurementEditor({ apply: false, silent: true });
+  if (!labelItem.el || !labelItem.el.isConnected) return;
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0.001';
+  input.step = labelItem.edit.step || '0.01';
+  input.className = 'measure-edit-input';
+  const currentValue = Number(labelItem.edit.currentValue?.());
+  input.value = Number.isFinite(currentValue) ? currentValue.toFixed(2) : '';
+  input.style.left = labelItem.el.style.left;
+  input.style.top = labelItem.el.style.top;
+  labelsLayer.appendChild(input);
+  labelItem.el.style.visibility = 'hidden';
+
+  activeMeasurementEditor = { input, labelItem };
+  input.addEventListener('pointerdown', (event) => event.stopPropagation());
+  input.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      closeMeasurementEditor({ apply: true });
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMeasurementEditor({ apply: false, silent: true });
+    }
+  });
+  input.addEventListener('blur', () => {
+    closeMeasurementEditor({ apply: false, silent: true });
+  });
+  input.focus();
+  input.select();
 }
 
 function rebuildMeasurements() {
@@ -1254,7 +1668,7 @@ function rebuildMeasurements() {
     points.push(new THREE.Vector3(a.x, a.y, 2.2), new THREE.Vector3(b.x, b.y, 2.2));
   };
 
-  const drawLinearDimension = (start, end, labelText = null, labelKind = 'linear') => {
+  const drawLinearDimension = (start, end, labelText = null, labelKind = 'linear', editConfig = null) => {
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const len = Math.hypot(dx, dy);
@@ -1287,10 +1701,10 @@ function rebuildMeasurements() {
     pushSegment(b, bRight);
 
     const labelPos = { x: (a.x + b.x) / 2 + nx * (4 / camera.zoom), y: (a.y + b.y) / 2 + ny * (4 / camera.zoom) };
-    addMeasurementLabel(labelPos, labelText || mm(len), labelKind);
+    addMeasurementLabel(labelPos, labelText || mm(len), labelKind, editConfig);
   };
 
-  const drawRadiusLeader = (center, radius, angleRad, labelText, labelKind = 'radius') => {
+  const drawRadiusLeader = (center, radius, angleRad, labelText, labelKind = 'radius', editConfig = null) => {
     if (radius < 1e-6) return;
     const ux = Math.cos(angleRad);
     const uy = Math.sin(angleRad);
@@ -1308,10 +1722,10 @@ function rebuildMeasurements() {
     const tickB = { x: anchor.x - nx * tick, y: anchor.y - ny * tick };
     pushSegment(tickA, tickB);
 
-    addMeasurementLabel({ x: leader.x + ux * (3 / camera.zoom), y: leader.y + uy * (3 / camera.zoom) }, labelText, labelKind);
+    addMeasurementLabel({ x: leader.x + ux * (3 / camera.zoom), y: leader.y + uy * (3 / camera.zoom) }, labelText, labelKind, editConfig);
   };
 
-  const drawArcLengthTag = (arcItem) => {
+  const drawArcLengthTag = (arcItem, editConfig = null) => {
     const startRad = THREE.MathUtils.degToRad(arcItem.startAngle);
     const endRad = THREE.MathUtils.degToRad(arcItem.endAngle);
     const sweep = normalizeRad(endRad - startRad);
@@ -1326,10 +1740,10 @@ function rebuildMeasurements() {
     pushSegment(anchor, guide);
 
     const arcLen = arcItem.r * sweep;
-    addMeasurementLabel({ x: guide.x + ux * (3 / camera.zoom), y: guide.y + uy * (3 / camera.zoom) }, `A ${mm(arcLen)}`, 'arc');
+    addMeasurementLabel({ x: guide.x + ux * (3 / camera.zoom), y: guide.y + uy * (3 / camera.zoom) }, `A ${mm(arcLen)}`, 'arc', editConfig);
   };
 
-  const drawArcAngleTag = (arcItem) => {
+  const drawArcAngleTag = (arcItem, editConfig = null) => {
     const startRad = THREE.MathUtils.degToRad(arcItem.startAngle);
     const endRad = THREE.MathUtils.degToRad(arcItem.endAngle);
     const sweep = normalizeRad(endRad - startRad);
@@ -1339,30 +1753,72 @@ function rebuildMeasurements() {
     const ux = Math.cos(mid);
     const uy = Math.sin(mid);
     const anchor = { x: arcItem.cx + ux * Math.max(arcItem.r * 0.55, 2), y: arcItem.cy + uy * Math.max(arcItem.r * 0.55, 2) };
-    addMeasurementLabel(anchor, `Ang ${deg(THREE.MathUtils.radToDeg(sweep))}`, 'angle');
+    addMeasurementLabel(anchor, `Ang ${deg(THREE.MathUtils.radToDeg(sweep))}`, 'angle', editConfig);
   };
 
-  const drawCircleCircumferenceTag = (circleItem) => {
+  const drawCircleCircumferenceTag = (circleItem, editConfig = null) => {
     const uy = -1;
     const anchor = { x: circleItem.cx, y: circleItem.cy + uy * circleItem.r };
     const ext = Math.max(10 / camera.zoom, circleItem.r * 0.2);
     const guide = { x: anchor.x, y: anchor.y + uy * ext };
     pushSegment(anchor, guide);
-    addMeasurementLabel({ x: guide.x, y: guide.y + uy * (3 / camera.zoom) }, `C ${mm(Math.PI * 2 * circleItem.r)}`, 'circ');
+    addMeasurementLabel({ x: guide.x, y: guide.y + uy * (3 / camera.zoom) }, `C ${mm(Math.PI * 2 * circleItem.r)}`, 'circ', editConfig);
   };
 
   for (const item of items) {
     if (item.kind === 'segment') {
-      drawLinearDimension(item.start, item.end);
+      const segmentLen = Math.hypot(item.end.x - item.start.x, item.end.y - item.start.y);
+      const editConfig = item.entityType === 'LINE'
+        ? {
+          unit: 'mm',
+          step: '0.01',
+          currentValue: () => {
+            const line = entityById(item.entityId);
+            if (!line || line.type !== 'LINE') return segmentLen;
+            return Math.hypot((line.x2 - line.x1), (line.y2 - line.y1));
+          },
+          applyValue: (value) => applyMeasurementLineLength(item.entityId, value),
+          successMessage: (value) => `Linha ajustada para ${value.toFixed(2)} mm.`,
+        }
+        : null;
+      drawLinearDimension(item.start, item.end, null, 'linear', editConfig);
       continue;
     }
     if (item.kind === 'circle') {
       const left = { x: item.cx - item.r, y: item.cy };
       const right = { x: item.cx + item.r, y: item.cy };
-      drawLinearDimension(left, right, `D ${mm(item.r * 2)}`, 'diameter');
-      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, Math.PI / 4, `R ${mm(item.r)}`, 'radius');
+      drawLinearDimension(left, right, `D ${mm(item.r * 2)}`, 'diameter', {
+        unit: 'mm',
+        step: '0.01',
+        currentValue: () => {
+          const circle = entityById(item.entityId);
+          return circle && circle.type === 'CIRCLE' ? (circle.r * 2) : (item.r * 2);
+        },
+        applyValue: (value) => applyMeasurementCircleRadius(item.entityId, value / 2),
+        successMessage: (value) => `Diametro ajustado para ${value.toFixed(2)} mm.`,
+      });
+      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, Math.PI / 4, `R ${mm(item.r)}`, 'radius', {
+        unit: 'mm',
+        step: '0.01',
+        currentValue: () => {
+          const circle = entityById(item.entityId);
+          return circle && circle.type === 'CIRCLE' ? circle.r : item.r;
+        },
+        applyValue: (value) => applyMeasurementCircleRadius(item.entityId, value),
+        successMessage: (value) => `Raio do circulo ajustado para ${value.toFixed(2)} mm.`,
+      });
       addMeasurementLabel({ x: item.cx + item.r * 0.2, y: item.cy }, `Ang ${deg(360)}`, 'angle');
-      drawCircleCircumferenceTag(item);
+      drawCircleCircumferenceTag(item, {
+        unit: 'mm',
+        step: '0.01',
+        currentValue: () => {
+          const circle = entityById(item.entityId);
+          const r = circle && circle.type === 'CIRCLE' ? circle.r : item.r;
+          return Math.PI * 2 * r;
+        },
+        applyValue: (value) => applyMeasurementCircleRadius(item.entityId, value / (Math.PI * 2)),
+        successMessage: (value) => `Circunferencia ajustada para ${value.toFixed(2)} mm.`,
+      });
       continue;
     }
     if (item.kind === 'arc') {
@@ -1370,9 +1826,38 @@ function rebuildMeasurements() {
       const endRad = THREE.MathUtils.degToRad(item.endAngle);
       const sweep = normalizeRad(endRad - startRad);
       const mid = startRad + sweep / 2;
-      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, mid, `R ${mm(item.r)}`, 'radius');
-      drawArcAngleTag(item);
-      drawArcLengthTag(item);
+      drawRadiusLeader({ x: item.cx, y: item.cy }, item.r, mid, `R ${mm(item.r)}`, 'radius', {
+        unit: 'mm',
+        step: '0.01',
+        currentValue: () => {
+          const arc = entityById(item.entityId);
+          return arc && arc.type === 'ARC' ? arc.r : item.r;
+        },
+        applyValue: (value) => applyMeasurementArcRadius(item.entityId, value),
+        successMessage: (value) => `Raio do arco ajustado para ${value.toFixed(2)} mm.`,
+      });
+      drawArcAngleTag(item, {
+        unit: 'deg',
+        step: '0.1',
+        currentValue: () => {
+          const arc = entityById(item.entityId);
+          return arc && arc.type === 'ARC' ? arcSweepDeg(arc) : THREE.MathUtils.radToDeg(sweep);
+        },
+        applyValue: (value) => applyMeasurementArcSweep(item.entityId, value),
+        successMessage: (value) => `Angulo do arco ajustado para ${value.toFixed(2)} deg.`,
+      });
+      drawArcLengthTag(item, {
+        unit: 'mm',
+        step: '0.01',
+        currentValue: () => {
+          const arc = entityById(item.entityId);
+          if (!arc || arc.type !== 'ARC') return item.r * sweep;
+          const arcSweep = THREE.MathUtils.degToRad(arcSweepDeg(arc));
+          return arc.r * arcSweep;
+        },
+        applyValue: (value) => applyMeasurementArcLength(item.entityId, value),
+        successMessage: (value) => `Comprimento do arco ajustado para ${value.toFixed(2)} mm.`,
+      });
     }
   }
 
@@ -1401,6 +1886,10 @@ function updateLabelPositions() {
     item.el.style.display = 'block';
     item.el.style.left = `${(v.x * 0.5 + 0.5) * rect.width}px`;
     item.el.style.top = `${(-v.y * 0.5 + 0.5) * rect.height}px`;
+    if (activeMeasurementEditor?.labelItem === item && activeMeasurementEditor?.input) {
+      activeMeasurementEditor.input.style.left = item.el.style.left;
+      activeMeasurementEditor.input.style.top = item.el.style.top;
+    }
   }
 }
 
@@ -1542,6 +2031,9 @@ function refreshUi() {
 }
 
 function setTool(next) {
+  if (option3CommandOpen && next === 'vertex') {
+    closeOption3Command({ silent: true });
+  }
   if (cornerCommandOpen && next === 'vertex') {
     closeCornerCommand({ silent: true });
   }
@@ -1919,6 +2411,7 @@ function importFromText(text, fileName = 'editado.dxf') {
   hoveredHandle = null;
   activeHandle = null;
   closeRectCommand({ silent: true });
+  closeOption3Command({ silent: true });
   closeCornerCommand({ silent: true });
   undoStack = [];
   redoStack = [];
@@ -2014,6 +2507,45 @@ if (rectSizeYEl) {
 if (rectCreateBtnEl) {
   rectCreateBtnEl.addEventListener('click', () => createRectangleFromInput());
 }
+if (option3CommandPanelEl) {
+  option3CommandPanelEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+}
+for (const button of option3TypeButtons) {
+  button.addEventListener('click', () => {
+    setOption3Type(button.dataset.option3Type || 'circle');
+    setStatus(`Opcao 3: tipo selecionado - ${option3TypeLabel(option3Type)}.`);
+  });
+}
+if (option3RadiusEl) {
+  option3RadiusEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (option3Type === 'capsule90') {
+        option3SpanEl?.focus();
+        option3SpanEl?.select();
+      } else {
+        applyOption3Command();
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeOption3Command();
+    }
+  });
+}
+if (option3SpanEl) {
+  option3SpanEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      applyOption3Command();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeOption3Command();
+    }
+  });
+}
+if (option3ApplyBtnEl) {
+  option3ApplyBtnEl.addEventListener('click', () => applyOption3Command());
+}
 if (cornerCommandPanelEl) {
   cornerCommandPanelEl.addEventListener('pointerdown', (e) => e.stopPropagation());
 }
@@ -2095,9 +2627,13 @@ window.addEventListener('keydown', (e) => {
   const target = e.target;
   const isEscape = e.key === 'Escape';
   const hadRectCommandOpen = isEscape && rectangleCommandOpen;
+  const hadOption3CommandOpen = isEscape && option3CommandOpen;
   const hadCornerCommandOpen = isEscape && cornerCommandOpen;
   if (hadRectCommandOpen) {
     closeRectCommand({ silent: true });
+  }
+  if (hadOption3CommandOpen) {
+    closeOption3Command({ silent: true });
   }
   if (hadCornerCommandOpen) {
     closeCornerCommand({ silent: true });
@@ -2121,6 +2657,8 @@ window.addEventListener('keydown', (e) => {
       updateRectangleDraftPreview();
     } else if (hadRectCommandOpen) {
       setStatus('Opcao 1 encerrada.');
+    } else if (hadOption3CommandOpen) {
+      setStatus('Opcao 3 encerrada.');
     } else if (hadCornerCommandOpen) {
       setStatus('Opcao 2 encerrada.');
     }
@@ -2184,6 +2722,7 @@ rebuildScene();
 refreshUi();
 renderActionSlots();
 renderActionCard();
+updateOption3TypeButtons();
 updateCornerTypeButtons();
 updateCornerSelectionInfo();
 animate();

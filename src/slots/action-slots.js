@@ -159,6 +159,33 @@
         cornerSvg.appendChild(base);
         cornerSvg.appendChild(roundArc);
         button.appendChild(cornerSvg);
+      } else if (slot.icon === 'circle-shape') {
+        const shapeSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        shapeSvg.setAttribute('viewBox', '0 0 24 24');
+        shapeSvg.setAttribute('class', 'option-slot-icon option-slot-icon--svg');
+        shapeSvg.setAttribute('width', '28');
+        shapeSvg.setAttribute('height', '28');
+        shapeSvg.setAttribute('aria-hidden', 'true');
+
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', '8.4');
+        circle.setAttribute('cy', '12');
+        circle.setAttribute('r', '4.2');
+        circle.setAttribute('fill', 'none');
+        circle.setAttribute('stroke', '#22d3ee');
+        circle.setAttribute('stroke-width', '1.9');
+
+        const capsule = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        capsule.setAttribute('d', 'M11.5 8h5.5a2.5 2.5 0 0 1 0 5h-5.5a2.5 2.5 0 0 1 0-5Z');
+        capsule.setAttribute('fill', 'none');
+        capsule.setAttribute('stroke', '#f59e0b');
+        capsule.setAttribute('stroke-width', '1.8');
+        capsule.setAttribute('stroke-linecap', 'round');
+        capsule.setAttribute('stroke-linejoin', 'round');
+
+        shapeSvg.appendChild(circle);
+        shapeSvg.appendChild(capsule);
+        button.appendChild(shapeSvg);
       } else {
         const iconEl = document.createElement('span');
         iconEl.className = 'option-slot-icon option-slot-icon--text';
