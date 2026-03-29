@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
 const model = window.DxfModel;
 const io = window.DxfIO;
 if (!model) throw new Error('DxfModel nao encontrado. Carregue src/model.js antes de src/app.js.');
@@ -19,15 +19,24 @@ const viewportWrap = $('viewportWrap');
 const labelsLayer = $('labelsLayer');
 labelsLayer.style.display = 'none';
 const selectionRectEl = $('selectionRect');
+const rectDraftRectEl = $('rectDraftRect');
+const rectCommandPanelEl = $('rectCommandPanel');
+const rectSizeXEl = $('rectSizeX');
+const rectSizeYEl = $('rectSizeY');
+const rectCreateBtnEl = $('rectCreateBtn');
 const dropHint = $('dropHint');
 const statusbar = $('statusbar');
 const layersEl = $('layers');
 const selectionInfoEl = $('selectionInfo');
 const propertiesEl = $('properties');
+const actionSlotsEl = $('actionSlots');
+const actionCardEl = $('actionCard');
 const toolButtons = [...document.querySelectorAll('.tool')];
 const showGridEl = $('showGrid');
 const snapGridEl = $('snapGrid');
 const snapPointsEl = $('snapPoints');
+const actionSlotsApi = window.DxfActionSlots;
+if (!actionSlotsApi) throw new Error('DxfActionSlots nao encontrado. Carregue src/slots/action-slots.js antes de src/app.js.');
 
 const renderer = new THREE.WebGLRenderer({ canvas: viewport, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -59,6 +68,7 @@ const dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 let doc = createEmptyDoc();
 let selectedIds = new Set();
 let hoveredHandle = null;
+let activeHandle = null;
 let tool = 'select';
 let dragState = null;
 let meshByEntityId = new Map();
@@ -68,15 +78,36 @@ let undoStack = [];
 let redoStack = [];
 let needsRender = true;
 let pendingZoom = null;
+let rectangleCommandOpen = false;
 const ENTITY_PICK_RADIUS_PX = 2;
-const VERTEX_PICK_RADIUS_PX = 10;
-const YELLOW_HANDLE_SCALE = 3;
+const VERTEX_PICK_RADIUS_PX = 14;
+const VERTEX_DRAG_DEADZONE_PX = 3;
+const VERTEX_DRAG_CLICK_GUARD_PX = 8;
+const VERTEX_DRAG_CLICK_GUARD_MS = 180;
+// Handles amarelos ampliados para melhorar visibilidade no modo Vertices.
+const YELLOW_HANDLE_SCALE = 0.6;
 const HANDLE_BASE_RADIUS = 1.25;
 
 function setStatus(msg) { statusbar.textContent = msg; }
 function requestRender() { needsRender = true; }
 function mm(v) { return `${Number(v || 0).toFixed(2)} mm`; }
 function entityById(id) { return doc.entities.find((e) => e.id === id); }
+function sameHandleRef(a, b) {
+  if (!a || !b) return false;
+  return a.entityId === b.entityId && String(a.vertexIndex) === String(b.vertexIndex);
+}
+function setHoveredHandle(nextHandle) {
+  if (sameHandleRef(hoveredHandle, nextHandle)) return;
+  hoveredHandle = nextHandle ? { entityId: nextHandle.entityId, vertexIndex: nextHandle.vertexIndex } : null;
+  updateHandleVisualScale();
+  requestRender();
+}
+function setActiveHandle(nextHandle) {
+  if (sameHandleRef(activeHandle, nextHandle)) return;
+  activeHandle = nextHandle ? { entityId: nextHandle.entityId, vertexIndex: nextHandle.vertexIndex } : null;
+  updateHandleVisualScale();
+  requestRender();
+}
 function fileCodeFromName(fileName = '') {
   const tail = String(fileName || '').trim().replace(/\\/g, '/').split('/').pop() || '';
   return tail.replace(/\.[^.]+$/, '').trim();
@@ -91,6 +122,34 @@ function currentPieceSize() {
     y: Math.max(0, bounds.maxY - bounds.minY),
   };
 }
+// Controller dedicado aos slots/execucoes para manter o app.js focado na edicao DXF.
+const actionSlotsController = actionSlotsApi.createController({
+  slotsEl: actionSlotsEl,
+  cardEl: actionCardEl,
+  getToolId: () => tool,
+  getSelectedCount: () => selectedIds.size,
+  setStatus,
+});
+function updateActionSlotAvailability() {
+  actionSlotsController.updateAvailability();
+}
+function renderActionCard() {
+  actionSlotsController.renderCard();
+}
+function renderActionSlots() {
+  actionSlotsController.renderSlots();
+}
+actionSlotsController.setSlotMeta(1, {
+  label: 'Criar retangulo',
+  icon: 'cube',
+  allowedTools: ['select', 'vertex', 'window'],
+});
+actionSlotsController.registerHandler(1, () => {
+  const opened = openRectCommand();
+  return opened
+    ? { ok: true, detail: 'Opcao 1 ativa: informe X e Y (mm) para criar retangulo.' }
+    : { ok: false, detail: 'Nao foi possivel abrir a Opcao 1.' };
+});
 function selectionPivot() {
   const entities = [...selectedIds].map((id) => entityById(id)).filter(Boolean);
   if (!entities.length) return { x: 0, y: 0 };
@@ -133,6 +192,9 @@ function restoreFrom(serialized) {
   doc = JSON.parse(serialized);
   ensureLayers(doc);
   selectedIds.clear();
+  hoveredHandle = null;
+  activeHandle = null;
+  closeRectCommand({ silent: true });
   rebuildScene();
   refreshUi();
 }
@@ -191,9 +253,10 @@ function zoomAtClient(clientX, clientY, deltaY) {
   camera.position.y += dy;
   controls.target.x += dx;
   controls.target.y += dy;
-  buildHandles();
+  updateHandleVisualScale();
   rebuildGrid();
   updateLabelPositions();
+  updateRectangleDraftPreview();
   requestRender();
 }
 
@@ -255,6 +318,154 @@ function screenFromWorld(pos) {
   const v = new THREE.Vector3(pos.x, pos.y, 0).project(camera);
   const rect = renderer.domElement.getBoundingClientRect();
   return { x: (v.x * 0.5 + 0.5) * rect.width, y: (-v.y * 0.5 + 0.5) * rect.height };
+}
+
+function parsePositiveMm(value) {
+  const parsed = Number(String(value ?? '').replace(',', '.'));
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function createRuntimeEntityId(prefix = 'e') {
+  let id = '';
+  do {
+    id = `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  } while (doc.entities.some((entity) => entity.id === id));
+  return id;
+}
+
+function createLineLoopEntities(points, options = {}) {
+  if (!Array.isArray(points) || points.length < 3) return [];
+  const layer = options.layer || '0';
+  const namePrefix = options.namePrefix || 'Forma';
+  const edges = [];
+  for (let i = 0; i < points.length; i += 1) {
+    const current = points[i];
+    const next = points[(i + 1) % points.length];
+    if (!current || !next) continue;
+    edges.push({
+      id: createRuntimeEntityId('shape'),
+      type: 'LINE',
+      layer,
+      x1: current.x,
+      y1: current.y,
+      x2: next.x,
+      y2: next.y,
+      name: `${namePrefix} - Segmento ${i + 1}`,
+    });
+  }
+  return edges;
+}
+
+function rectangleAnchorWorld() {
+  if (selectedIds.size) return selectionPivot();
+  return { x: controls.target.x, y: controls.target.y };
+}
+
+function hideRectangleDraftPreview() {
+  if (!rectDraftRectEl) return;
+  rectDraftRectEl.style.display = 'none';
+}
+
+function updateRectangleDraftPreview() {
+  if (!rectangleCommandOpen || !rectDraftRectEl) {
+    hideRectangleDraftPreview();
+    return;
+  }
+  const sizeX = parsePositiveMm(rectSizeXEl?.value);
+  const sizeY = parsePositiveMm(rectSizeYEl?.value);
+  if (!sizeX || !sizeY) {
+    hideRectangleDraftPreview();
+    return;
+  }
+  const anchor = rectangleAnchorWorld();
+  const halfX = sizeX / 2;
+  const halfY = sizeY / 2;
+  const a = screenFromWorld({ x: anchor.x - halfX, y: anchor.y - halfY });
+  const b = screenFromWorld({ x: anchor.x + halfX, y: anchor.y + halfY });
+  if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) {
+    hideRectangleDraftPreview();
+    return;
+  }
+  rectDraftRectEl.style.display = 'block';
+  rectDraftRectEl.style.left = `${Math.min(a.x, b.x)}px`;
+  rectDraftRectEl.style.top = `${Math.min(a.y, b.y)}px`;
+  rectDraftRectEl.style.width = `${Math.abs(b.x - a.x)}px`;
+  rectDraftRectEl.style.height = `${Math.abs(b.y - a.y)}px`;
+}
+
+function closeRectCommand(options = {}) {
+  const { silent = false } = options;
+  rectangleCommandOpen = false;
+  if (rectCommandPanelEl) rectCommandPanelEl.hidden = true;
+  hideRectangleDraftPreview();
+  actionSlotsController.setActiveSlot(null);
+  if (!silent) setStatus('Opcao 1 encerrada.');
+}
+
+function createRectangleFromInput() {
+  const sizeX = parsePositiveMm(rectSizeXEl?.value);
+  if (!sizeX) {
+    setStatus('Informe X (mm) maior que zero.');
+    rectSizeXEl?.focus();
+    rectSizeXEl?.select();
+    return false;
+  }
+  const sizeY = parsePositiveMm(rectSizeYEl?.value);
+  if (!sizeY) {
+    setStatus('Informe Y (mm) maior que zero.');
+    rectSizeYEl?.focus();
+    rectSizeYEl?.select();
+    return false;
+  }
+
+  const anchor = rectangleAnchorWorld();
+  const halfX = sizeX / 2;
+  const halfY = sizeY / 2;
+  const xMin = anchor.x - halfX;
+  const xMax = anchor.x + halfX;
+  const yMin = anchor.y - halfY;
+  const yMax = anchor.y + halfY;
+
+  // Opcao 1 segue o mesmo padrao que sera usado para outras geometrias:
+  // contorno convertido em multiplas entidades LINE (nao polilinha unica).
+  const rectPoints = [
+    { x: xMin, y: yMin },
+    { x: xMax, y: yMin },
+    { x: xMax, y: yMax },
+    { x: xMin, y: yMax },
+  ];
+  const rectEdges = createLineLoopEntities(rectPoints, {
+    layer: '0',
+    namePrefix: `Retangulo ${sizeX.toFixed(2)}x${sizeY.toFixed(2)}`,
+  });
+
+  pushUndo('criar retangulo');
+  doc.entities.push(...rectEdges);
+  ensureLayers(doc);
+  selectedIds = new Set(rectEdges.map((edge) => edge.id));
+  setHoveredHandle(null);
+  setActiveHandle(null);
+  closeRectCommand({ silent: true });
+  rebuildScene();
+  refreshUi();
+  requestRender();
+  setStatus(`Retangulo criado: ${sizeX.toFixed(2)} x ${sizeY.toFixed(2)} mm.`);
+  return true;
+}
+
+function openRectCommand() {
+  if (!rectCommandPanelEl || !rectSizeXEl || !rectSizeYEl) return false;
+  rectangleCommandOpen = true;
+  rectCommandPanelEl.hidden = false;
+  actionSlotsController.setActiveSlot(1);
+  if (!parsePositiveMm(rectSizeXEl.value)) rectSizeXEl.value = '100';
+  if (!parsePositiveMm(rectSizeYEl.value)) rectSizeYEl.value = '100';
+  rectSizeXEl.focus();
+  rectSizeXEl.select();
+  updateRectangleDraftPreview();
+  setStatus('Opcao 1: digite X (mm), Enter, depois Y (mm) e Enter para criar.');
+  return true;
 }
 
 function getVisibleBounds() {
@@ -322,13 +533,74 @@ function snapWorld(pos, excludeEntityId = null) {
 }
 
 function makeHandle(pos, color = 0xfbbf24, meta = {}, sizeScale = 1) {
-  const size = (HANDLE_BASE_RADIUS * sizeScale) / Math.max(0.1, camera.zoom);
-  const geom = new THREE.CircleGeometry(size, 18);
+  const geom = new THREE.CircleGeometry(HANDLE_BASE_RADIUS, 20);
   const mat = new THREE.MeshBasicMaterial({ color });
   const mesh = new THREE.Mesh(geom, mat);
+  const ringGeom = new THREE.RingGeometry(HANDLE_BASE_RADIUS * 1.12, HANDLE_BASE_RADIUS * 1.38, 24);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0,
+    side: THREE.DoubleSide,
+    depthTest: false,
+  });
+  const ring = new THREE.Mesh(ringGeom, ringMat);
+  ring.position.z = -0.02;
+  mesh.add(ring);
   mesh.position.set(pos.x, pos.y, 3);
-  mesh.userData = { handle: true, ...meta };
+  mesh.userData = {
+    handle: true,
+    handleSizeScale: sizeScale,
+    baseColor: color,
+    fillMaterial: mat,
+    ringMaterial: ringMat,
+    ...meta,
+  };
+  const zoomScale = 1 / Math.max(0.1, camera.zoom);
+  mesh.scale.setScalar(sizeScale * zoomScale);
   return mesh;
+}
+
+function updateHandleVisualScale() {
+  const zoomScale = 1 / Math.max(0.1, camera.zoom);
+  for (const handle of handlesRoot.children) {
+    const isHovered = sameHandleRef(handle.userData, hoveredHandle);
+    const isActive = sameHandleRef(handle.userData, activeHandle);
+    const hoverBoost = isActive ? 1.18 : (isHovered ? 1.08 : 1);
+    const scale = (handle.userData?.handleSizeScale || 1) * zoomScale * hoverBoost;
+    handle.scale.setScalar(scale);
+    const fillMat = handle.userData?.fillMaterial;
+    const ringMat = handle.userData?.ringMaterial;
+    if (fillMat) {
+      fillMat.color.setHex(isActive ? 0xef4444 : (handle.userData?.baseColor || 0xfbbf24));
+    }
+    if (ringMat) {
+      if (isActive) {
+        ringMat.color.setHex(0xef4444);
+        ringMat.opacity = 0.95;
+      } else if (isHovered) {
+        ringMat.color.setHex(0x38bdf8);
+        ringMat.opacity = 0.9;
+      } else {
+        ringMat.opacity = 0;
+      }
+    }
+  }
+}
+
+function disposeObject(object3d) {
+  if (!object3d) return;
+  for (const child of [...(object3d.children || [])]) {
+    disposeObject(child);
+  }
+  const material = object3d.material;
+  if (Array.isArray(material)) {
+    material.forEach((item) => item?.dispose?.());
+  } else {
+    material?.dispose?.();
+  }
+  object3d.geometry?.dispose?.();
+  object3d.parent?.remove(object3d);
 }
 
 function entityToObject(entity) {
@@ -366,11 +638,7 @@ function entityToObject(entity) {
 }
 
 function buildHandles() {
-  while (handlesRoot.children.length) {
-    const c = handlesRoot.children.pop();
-    c.geometry?.dispose?.();
-    c.material?.dispose?.();
-  }
+  while (handlesRoot.children.length) disposeObject(handlesRoot.children[0]);
   if (tool !== 'vertex') return;
   for (const id of selectedIds) {
     const e = entityById(id);
@@ -382,7 +650,8 @@ function buildHandles() {
     } else if (e.type === 'POINT') {
       handlesRoot.add(makeHandle({ x: e.x, y: e.y }, 0xfbbf24, { entityId: e.id, vertexIndex: 'point' }, YELLOW_HANDLE_SCALE));
     } else if (e.type === 'CIRCLE' || e.type === 'ARC') {
-      handlesRoot.add(makeHandle({ x: e.cx, y: e.cy }, 0x22c55e, { entityId: e.id, vertexIndex: 'center' }));
+      // Centro com a mesma escala dos handles amarelos para manter leitura visual consistente (auto-sync F3).
+      handlesRoot.add(makeHandle({ x: e.cx, y: e.cy }, 0x22c55e, { entityId: e.id, vertexIndex: 'center' }, YELLOW_HANDLE_SCALE));
       handlesRoot.add(makeHandle({ x: e.cx + e.r, y: e.cy }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radiusE' }, YELLOW_HANDLE_SCALE));
       handlesRoot.add(makeHandle({ x: e.cx, y: e.cy + e.r }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radiusN' }, YELLOW_HANDLE_SCALE));
       handlesRoot.add(makeHandle({ x: e.cx - e.r, y: e.cy }, 0xfbbf24, { entityId: e.id, vertexIndex: 'radiusW' }, YELLOW_HANDLE_SCALE));
@@ -391,6 +660,7 @@ function buildHandles() {
       e.points.forEach((p, i) => handlesRoot.add(makeHandle(p, 0xfbbf24, { entityId: e.id, vertexIndex: i }, YELLOW_HANDLE_SCALE)));
     }
   }
+  updateHandleVisualScale();
 }
 
 function updateEntityObject(entityId) {
@@ -406,11 +676,7 @@ function updateEntityObject(entityId) {
 }
 
 function rebuildScene() {
-  for (const child of [...workRoot.children, ...handlesRoot.children]) {
-    child.geometry?.dispose?.();
-    child.material?.dispose?.();
-    child.parent?.remove(child);
-  }
+  for (const child of [...workRoot.children, ...handlesRoot.children]) disposeObject(child);
   meshByEntityId = new Map();
   for (const entity of doc.entities) {
     const obj = entityToObject(entity);
@@ -554,7 +820,7 @@ function fitView() {
   camera.updateProjectionMatrix();
   controls.target.set(camera.position.x, camera.position.y, 0);
   controls.update();
-  buildHandles();
+  updateHandleVisualScale();
   rebuildGrid();
   updateLabelPositions();
   requestRender();
@@ -638,6 +904,7 @@ function makeInputRow(label, value, onChange, type = 'text', step = '0.01') {
 
 function refreshProperties() {
   propertiesEl.innerHTML = '';
+  if (tool === 'select' || tool === 'vertex') return;
   if (selectedIds.size !== 1) return;
   const e = entityById([...selectedIds][0]);
   if (!e) return;
@@ -674,18 +941,27 @@ function refreshUi() {
 
 function setTool(next) {
   tool = next;
+  if (next !== 'vertex') {
+    setHoveredHandle(null);
+    setActiveHandle(null);
+  }
   toolButtons.forEach((b) => b.classList.toggle('active', b.dataset.tool === next));
   controls.enabled = next !== 'window';
   buildHandles();
   rebuildMeasurements();
+  updateActionSlotAvailability();
   refreshUi();
+  updateRectangleDraftPreview();
   requestRender();
 }
 
 function selectSingle(id) {
+  setHoveredHandle(null);
+  setActiveHandle(null);
   selectedIds = new Set(id ? [id] : []);
   rebuildScene();
   refreshUi();
+  updateRectangleDraftPreview();
 }
 
 function updateSelectionRect(start, end) {
@@ -711,40 +987,74 @@ function windowSelect(startWorld, endWorld, additive = false) {
   } else {
     selectedIds = new Set(ids);
   }
+  setHoveredHandle(null);
+  setActiveHandle(null);
   rebuildScene();
   refreshUi();
+  updateRectangleDraftPreview();
   setStatus(`${ids.length} peca(s) selecionada(s) por janela.`);
 }
 
-function hoverHandleNear(clientX, clientY) {
-  if (tool !== 'vertex' || !selectedIds.size) return null;
+function collectVertexCandidates(entity) {
+  const pts = [];
+  if (entity.type === 'LINE') {
+    pts.push(
+      { idx: 0, p: { x: entity.x1, y: entity.y1 } },
+      { idx: 1, p: { x: entity.x2, y: entity.y2 } },
+      { idx: 'midpoint', p: { x: (entity.x1 + entity.x2) / 2, y: (entity.y1 + entity.y2) / 2 } },
+    );
+  } else if (entity.type === 'POINT') {
+    pts.push({ idx: 'point', p: { x: entity.x, y: entity.y } });
+  } else if (entity.type === 'CIRCLE' || entity.type === 'ARC') {
+    pts.push(
+      { idx: 'center', p: { x: entity.cx, y: entity.cy } },
+      { idx: 'radiusE', p: { x: entity.cx + entity.r, y: entity.cy } },
+      { idx: 'radiusN', p: { x: entity.cx, y: entity.cy + entity.r } },
+      { idx: 'radiusW', p: { x: entity.cx - entity.r, y: entity.cy } },
+      { idx: 'radiusS', p: { x: entity.cx, y: entity.cy - entity.r } },
+    );
+  } else if (entity.points) {
+    entity.points.forEach((p, i) => pts.push({ idx: i, p }));
+  }
+  return pts;
+}
+
+function getVertexPosition(entity, vertexIndex) {
+  const candidate = collectVertexCandidates(entity).find((item) => item.idx === vertexIndex);
+  return candidate?.p || null;
+}
+
+function hoverHandleNear(clientX, clientY, options = {}) {
+  if (tool !== 'vertex') return null;
+  const includeAllVisible = Boolean(options.includeAllVisible);
+  const selectedIdsSet = new Set(selectedIds);
+  const candidateIds = includeAllVisible
+    ? doc.entities
+      .filter((entity) => {
+        const layer = getLayer(doc, entity.layer || '0');
+        return layer.visible && isEntityEditable(doc, entity);
+      })
+      .map((entity) => entity.id)
+    : [...selectedIds];
+  if (!candidateIds.length) return null;
   const world = worldFromClient(clientX, clientY);
   let best = null;
   const threshold = pickRadiusWorld(VERTEX_PICK_RADIUS_PX);
-  for (const eId of selectedIds) {
+  for (const eId of candidateIds) {
     const e = entityById(eId);
     if (!e) continue;
-    const pts = [];
-    if (e.type === 'LINE') pts.push(
-      { idx: 0, p: { x: e.x1, y: e.y1 } },
-      { idx: 1, p: { x: e.x2, y: e.y2 } },
-      { idx: 'midpoint', p: { x: (e.x1 + e.x2) / 2, y: (e.y1 + e.y2) / 2 } }
-    );
-    else if (e.type === 'POINT') pts.push({ idx: 'point', p: { x: e.x, y: e.y } });
-    else if (e.type === 'CIRCLE' || e.type === 'ARC') pts.push(
-      { idx: 'center', p: { x: e.cx, y: e.cy } },
-      { idx: 'radiusE', p: { x: e.cx + e.r, y: e.cy } },
-      { idx: 'radiusN', p: { x: e.cx, y: e.cy + e.r } },
-      { idx: 'radiusW', p: { x: e.cx - e.r, y: e.cy } },
-      { idx: 'radiusS', p: { x: e.cx, y: e.cy - e.r } }
-    );
-    else if (e.points) e.points.forEach((p, i) => pts.push({ idx: i, p }));
+    const priority = selectedIdsSet.has(e.id) ? 0 : 1;
+    const pts = collectVertexCandidates(e);
     for (const item of pts) {
       const d = distance(world, item.p);
-      if (d < threshold && (!best || d < best.d)) best = { entityId: e.id, vertexIndex: item.idx, d };
+      if (d >= threshold) continue;
+      if (!best || priority < best.priority || (priority === best.priority && d < best.d)) {
+        best = { entityId: e.id, vertexIndex: item.idx, d, priority };
+      }
     }
   }
-  return best;
+  if (!best) return null;
+  return { entityId: best.entityId, vertexIndex: best.vertexIndex, d: best.d };
 }
 
 function startDrag(clientX, clientY, additive = false) {
@@ -756,12 +1066,49 @@ function startDrag(clientX, clientY, additive = false) {
     return;
   }
   if (tool === 'vertex') {
-    const hover = hoverHandleNear(clientX, clientY);
+    const hover = hoverHandleNear(clientX, clientY, { includeAllVisible: true });
     if (hover) {
-      pushUndo('editar vertice');
-      dragState = { type: 'vertex', ...hover };
+      // Com ponto ativo (vermelho), bloqueia arraste, mas permite trocar o ponto ativo.
+      if (activeHandle) {
+        const sameActive = sameHandleRef(activeHandle, hover);
+        if (!sameActive) {
+          if (selectedIds.size !== 1 || !selectedIds.has(hover.entityId)) {
+            selectSingle(hover.entityId);
+          }
+          setActiveHandle(hover);
+          setStatus('Ponto ativo alterado. Arraste bloqueado ate limpar selecao com Esc ou clique fora.');
+          return;
+        }
+        setStatus('Ponto ativo travado. Pressione Esc ou clique fora para deselecionar antes de mover.');
+        return;
+      }
+      if (selectedIds.size !== 1 || !selectedIds.has(hover.entityId)) {
+        selectSingle(hover.entityId);
+      }
+      const hoverEntity = entityById(hover.entityId);
+      const startVertexPos = hoverEntity ? getVertexPosition(hoverEntity, hover.vertexIndex) : null;
+      if (!startVertexPos) {
+        setStatus('Nao foi possivel selecionar este vertice.');
+        return;
+      }
+      setActiveHandle(hover);
+      dragState = {
+        type: 'vertex',
+        ...hover,
+        undoPushed: false,
+        started: false,
+        changed: false,
+        movedPx: 0,
+        startTimeMs: performance.now(),
+        startClient: { x: clientX, y: clientY },
+        startWorld: { x: world.x, y: world.y },
+        startVertexPos: { x: startVertexPos.x, y: startVertexPos.y },
+        startEntitySnapshot: JSON.parse(JSON.stringify(hoverEntity)),
+      };
+      setStatus('Vertice selecionado. Arraste para editar.');
       return;
     }
+    setActiveHandle(null);
   }
   if (hit?.type === 'entity') {
     const entityId = hit.object.userData.entityId;
@@ -797,8 +1144,29 @@ function moveDrag(clientX, clientY) {
   if (dragState.type === 'vertex') {
     const entity = entityById(dragState.entityId);
     if (!entity) return;
-    const world = snapWorld(worldRaw, entity.id);
-    updateVertex(entity, dragState.vertexIndex, world);
+    const dragPx = Math.hypot(clientX - dragState.startClient.x, clientY - dragState.startClient.y);
+    dragState.movedPx = Math.max(dragState.movedPx || 0, dragPx);
+
+    if (!dragState.started) {
+      if (dragPx < VERTEX_DRAG_DEADZONE_PX) return;
+      dragState.started = true;
+    }
+
+    const deltaX = worldRaw.x - dragState.startWorld.x;
+    const deltaY = worldRaw.y - dragState.startWorld.y;
+    const targetWorld = snapWorld({
+      x: dragState.startVertexPos.x + deltaX,
+      y: dragState.startVertexPos.y + deltaY,
+    }, entity.id);
+
+    const currentPos = getVertexPosition(entity, dragState.vertexIndex);
+    if (!currentPos || distance(currentPos, targetWorld) <= 1e-6) return;
+    if (!dragState.undoPushed) {
+      pushUndo('editar vertice');
+      dragState.undoPushed = true;
+    }
+    updateVertex(entity, dragState.vertexIndex, targetWorld);
+    dragState.changed = true;
     updateEntityObject(entity.id);
     buildHandles();
     updateLabelPositions();
@@ -842,6 +1210,29 @@ function endDrag(clientX, clientY) {
       rebuildScene();
       refreshUi();
     }
+  } else if (dragState.type === 'vertex') {
+    const entity = entityById(dragState.entityId);
+    const elapsedMs = performance.now() - (dragState.startTimeMs || 0);
+    const accidentalClick = Boolean(
+      dragState.changed
+      && (dragState.movedPx || 0) <= VERTEX_DRAG_CLICK_GUARD_PX
+      && elapsedMs <= VERTEX_DRAG_CLICK_GUARD_MS
+    );
+    if (accidentalClick && entity && dragState.startEntitySnapshot) {
+      const idx = doc.entities.findIndex((item) => item.id === entity.id);
+      if (idx >= 0) {
+        doc.entities[idx] = dragState.startEntitySnapshot;
+        if (dragState.undoPushed && undoStack.length) undoStack.pop();
+        updateEntityObject(entity.id);
+        buildHandles();
+        updateLabelPositions();
+        refreshSelectionInfo();
+        requestRender();
+        setStatus('Clique rapido detectado: geometria preservada (anti-jitter).');
+      }
+    } else if (dragState.changed) {
+      setStatus('Ajuste de vertice aplicado.');
+    }
   }
   dragState = null;
 }
@@ -868,6 +1259,9 @@ function importFromText(text, fileName = 'editado.dxf') {
   doc.meta.fileName = fileName;
   doc.meta.pieceCode = fileCodeFromName(fileName);
   selectedIds.clear();
+  hoveredHandle = null;
+  activeHandle = null;
+  closeRectCommand({ silent: true });
   undoStack = [];
   redoStack = [];
   rebuildLabels();
@@ -905,6 +1299,8 @@ $('deleteBtn').addEventListener('click', () => {
   pushUndo('excluir');
   deleteSelected(doc, selectedIds);
   selectedIds.clear();
+  setHoveredHandle(null);
+  setActiveHandle(null);
   rebuildScene(); refreshUi();
 });
 $('rotateBtn').addEventListener('click', () => {
@@ -928,6 +1324,38 @@ showGridEl.addEventListener('change', () => { rebuildGrid(); requestRender(); })
 
 toolButtons.forEach((btn) => btn.addEventListener('click', () => setTool(btn.dataset.tool)));
 
+if (rectCommandPanelEl) {
+  rectCommandPanelEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+}
+if (rectSizeXEl) {
+  rectSizeXEl.addEventListener('input', updateRectangleDraftPreview);
+  rectSizeXEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      rectSizeYEl?.focus();
+      rectSizeYEl?.select();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeRectCommand();
+    }
+  });
+}
+if (rectSizeYEl) {
+  rectSizeYEl.addEventListener('input', updateRectangleDraftPreview);
+  rectSizeYEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      createRectangleFromInput();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeRectCommand();
+    }
+  });
+}
+if (rectCreateBtnEl) {
+  rectCreateBtnEl.addEventListener('click', () => createRectangleFromInput());
+}
+
 viewportWrap.addEventListener('dragenter', (e) => { e.preventDefault(); dropHint.style.display = 'block'; });
 viewportWrap.addEventListener('dragover', (e) => { e.preventDefault(); dropHint.style.display = 'block'; });
 viewportWrap.addEventListener('dragleave', (e) => { if (e.target === viewportWrap) dropHint.style.display = 'none'; });
@@ -947,12 +1375,14 @@ viewport.addEventListener('pointermove', (e) => {
     return;
   }
   if (tool === 'vertex') {
-    const hover = hoverHandleNear(e.clientX, e.clientY);
-    hoveredHandle = hover;
+    const hover = hoverHandleNear(e.clientX, e.clientY, { includeAllVisible: true });
+    setHoveredHandle(hover);
     if (hover) {
       viewport.style.cursor = 'pointer';
       return;
     }
+  } else {
+    setHoveredHandle(null);
   }
   const hit = intersectObjects(e.clientX, e.clientY, false);
   const entityId = hit?.type === 'entity' ? hit.object.userData.entityId : null;
@@ -969,28 +1399,50 @@ viewport.addEventListener('wheel', (e) => {
   queueZoomAtClient(e.clientX, e.clientY, normalizeWheelDelta(e));
 }, { passive: false });
 
-window.addEventListener('resize', () => { resize(); buildHandles(); rebuildGrid(); updateLabelPositions(); });
+window.addEventListener('resize', () => {
+  resize();
+  updateHandleVisualScale();
+  rebuildGrid();
+  updateLabelPositions();
+  updateRectangleDraftPreview();
+});
 window.addEventListener('keydown', (e) => {
   const target = e.target;
+  const isEscape = e.key === 'Escape';
+  const hadRectCommandOpen = isEscape && rectangleCommandOpen;
+  if (hadRectCommandOpen) {
+    closeRectCommand({ silent: true });
+  }
   const typing = target && (
     target.tagName === 'INPUT' ||
     target.tagName === 'TEXTAREA' ||
     target.tagName === 'SELECT' ||
     target.isContentEditable
   );
-  if (typing) return;
-  if (e.key === 'Escape') {
+  if (typing && !isEscape) return;
+  if (isEscape) {
     if (selectedIds.size) {
       selectedIds.clear();
+      setHoveredHandle(null);
+      setActiveHandle(null);
       rebuildScene();
       refreshUi();
       setStatus('Selecao limpa.');
+      updateRectangleDraftPreview();
+    } else if (hadRectCommandOpen) {
+      setStatus('Opcao 1 encerrada.');
     }
     return;
   }
   if (e.key === 'Delete') {
     if (selectedIds.size) {
-      pushUndo('excluir'); deleteSelected(doc, selectedIds); selectedIds.clear(); rebuildScene(); refreshUi();
+      pushUndo('excluir');
+      deleteSelected(doc, selectedIds);
+      selectedIds.clear();
+      setHoveredHandle(null);
+      setActiveHandle(null);
+      rebuildScene();
+      refreshUi();
     }
   }
   if (!e.ctrlKey && !e.metaKey) {
@@ -1009,7 +1461,12 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
 });
-controls.addEventListener('change', () => { rebuildGrid(); updateLabelPositions(); requestRender(); });
+controls.addEventListener('change', () => {
+  rebuildGrid();
+  updateLabelPositions();
+  updateRectangleDraftPreview();
+  requestRender();
+});
 
 function animate() {
   requestAnimationFrame(animate);
@@ -1022,5 +1479,7 @@ function animate() {
 resize();
 rebuildScene();
 refreshUi();
+renderActionSlots();
+renderActionCard();
 animate();
 })();

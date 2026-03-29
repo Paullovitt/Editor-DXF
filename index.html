@@ -54,12 +54,27 @@
             <p>Atalhos: Delete, E (90), R (45), Ctrl+Z, Ctrl+Y.</p>
           </div>
         </section>
+        <section>
+          <h3>Opcoes</h3>
+          <div id="actionSlots" class="option-grid" aria-label="Opcoes de edicao"></div>
+        </section>
       </aside>
 
       <section id="viewportWrap">
         <canvas id="viewport"></canvas>
         <div id="labelsLayer"></div>
         <div id="selectionRect"></div>
+        <div id="rectDraftRect"></div>
+        <div id="rectCommandPanel" class="rect-command-panel" hidden>
+          <div class="rect-command-row">
+            <label for="rectSizeX">X (mm)</label>
+            <input id="rectSizeX" type="number" min="0.001" step="0.01" placeholder="Largura" autocomplete="off" />
+            <label for="rectSizeY">Y (mm)</label>
+            <input id="rectSizeY" type="number" min="0.001" step="0.01" placeholder="Altura" autocomplete="off" />
+            <button id="rectCreateBtn" type="button">Criar</button>
+          </div>
+          <div class="small">Enter em X vai para Y. Enter em Y cria o retangulo.</div>
+        </div>
         <div id="dropHint">Solte um arquivo DXF aqui</div>
         <div id="statusbar">Pronto.</div>
       </section>
@@ -73,6 +88,12 @@
           <h3>Propriedades</h3>
           <form id="properties"></form>
         </section>
+        <section>
+          <h3>Execucoes</h3>
+          <div id="actionCard" class="action-card">
+            <div class="small">Nenhuma execucao ainda.</div>
+          </div>
+        </section>
       </aside>
     </main>
   </div>
@@ -81,6 +102,7 @@
   <script src="./lib/OrbitControls.js"></script>
   <script src="./src/model.js"></script>
   <script src="./src/dxf.js"></script>
+  <script src="./src/slots/action-slots.js"></script>
   <script src="./src/app.js"></script>
 </body>
 </html>

@@ -22,6 +22,8 @@ Regras de dominio geometrico (bounds, transformacoes, snap, selecao).
 Parser e exportador DXF.
 - `src/app.js`
 Orquestra UI, renderizacao, interacoes e import/export.
+- `src/slots/action-slots.js`
+Modulo dedicado aos 32 slots de `Opcoes` (render, disponibilidade por modo e historico de execucoes).
 
 ## Dependencias necessarias
 ### Runtime do app
@@ -46,6 +48,8 @@ Sem instalacao de build.
 4. Pressione `Esc` para limpar a selecao atual.
 5. O codigo da peca selecionada aparece no painel `Objeto/Propriedades`.
 6. Use `Enquadrar` se necessario e exporte com `Baixar DXF`.
+7. No painel esquerdo, use os 32 slots de `Opcoes` (grade 4x8) para disparar acoes.
+8. Cada clique de slot gera registro no painel direito em `Execucoes` (abaixo de `Propriedades`), com modo ativo e horario.
 
 ## Principais funcoes
 - `parseDxf(text, fileName)` em `src/dxf.js`
@@ -79,12 +83,17 @@ Solucao:
 - Painel `Objeto` foi simplificado para exibir apenas codigo, tamanho X e tamanho Y.
 - Selecao por `Janela` em linhas/polilinhas exibe cotas com seta e valor em milimetros no viewport.
 - Handles de vertice reduzidos para melhor leitura da geometria.
-- Pontos amarelos de vertice ajustados para 3x do tamanho base atual.
-- No modo `Vertices`, o painel de propriedades oculta `Codigo da peca`, `Tamanho X/Y` e `Camada`.
+- Pontos amarelos de vertice ajustados para 2.1x do tamanho base atual.
+- Nos modos `Selecionar` e `Vertices`, o painel `Propriedades` nao exibe campos de edicao.
 - No modo `Selecionar`, o painel `Objeto` mostra apenas a contagem de pecas selecionadas.
 - Linhas retas exibem ponto amarelo adicional no ponto medio.
 - Circulos/arcos exibem ponto central e quatro pontos amarelos cardeais (N, S, L, O).
 - Tolerancia de selecao por mouse ajustada para um raio invisivel pequeno no ponteiro (aprox. 2 px), com adaptacao ao zoom.
+- No modo `Vertices`, as bolinhas de controle (amarelas e verde em circulos/arcos) podem ser selecionadas por proximidade do mouse, inclusive para selecionar rapidamente a peca inteira e arrastar o ponto.
+- No modo `Vertices`, quando o mouse se aproxima de uma bolinha, aparece um contorno de foco; ao selecionar a bolinha, ela fica vermelha para indicar o ponto ativo.
+- Com bolinha vermelha ativa, o arraste de vertice fica travado para evitar movimento acidental, mas ainda e possivel clicar em outra bolinha amarela para trocar o ponto ativo; para liberar arraste, use `Esc` ou clique fora.
+- Arraste de vertices usa zona morta curta no clique (anti-jitter) e deslocamento por delta para evitar salto de posicao/raio em cliques rapidos.
+- Clique rapido nas bolinhas de vertices (sem arraste real) agora tem rollback automatico para evitar alteracao acidental de tamanho/posicao em circulos.
 - Handles de vertice usam escala visual adaptativa por zoom sem reconstruir geometria a cada scroll, melhorando fluidez/performance.
 - `Esc` limpa a selecao.
 - Cursor muda para `pointer` quando o mouse se aproxima de geometria selecionavel.
@@ -95,8 +104,15 @@ Solucao:
 - Atalhos de rotacao: `E` = 90 graus, `R` = 45 graus.
 - Botoes `Undo/Redo` removidos da barra (mantidos atalhos `Ctrl+Z` e `Ctrl+Y`).
 - Exportacao usa o mesmo nome do arquivo original (sem sufixo `_editado`).
+- Novo painel `Opcoes` com 32 slots vazios (4 colunas x 8 linhas), pronto para receber logica de edicao por slot.
+- Novo card `Execucoes` abaixo de `Propriedades`, exibindo historico das ultimas execucoes dos slots.
+- Logica dos slots foi extraida para `src/slots/action-slots.js`, deixando o `src/app.js` mais enxuto para evolucao das ferramentas de edicao.
+- Slot `Opcao 1` agora exibe icone de cubo e aciona criacao de retangulo por medidas: `X (mm)` -> `Enter` -> `Y (mm)` -> `Enter` para criar.
+- Durante a digitacao de `X/Y`, um preview do retangulo aparece no viewport para confirmar o tamanho antes de criar.
+- O retangulo da `Opcao 1` e gerado como 4 entidades `LINE` (base, direita, topo e esquerda), evitando virar uma unica polilinha e preservando cantos/vertices explicitos.
+- Padrao adotado para as proximas geometrias das `Opcoes`: gerar contorno em entidades segmentadas (`LINE`) para manter vertices editaveis e evitar geometria em linha unica.
 
-## Licenca
+## Licenca 
 MIT. Consulte `LICENSE`.
 
 ## Autor
